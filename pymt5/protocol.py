@@ -1,6 +1,6 @@
 import struct
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from pymt5.constants import (
     HEADER_BYTE_LENGTH,
@@ -57,25 +57,41 @@ def parse_response_frame(data: bytes) -> ResponseFrame:
     return ResponseFrame(command=command, code=code, body=body)
 
 
-def _field_type(field: Sequence | Mapping) -> int:
+def _field_type(field: Sequence[object] | Mapping[str, object]) -> int:
     if isinstance(field, Mapping):
-        return int(field["propType"])
-    return int(field[0])
+        value = field["propType"]
+        if not isinstance(value, int):
+            raise TypeError("propType must be an int")
+        return value
+    value = field[0]
+    if not isinstance(value, int):
+        raise TypeError("propType must be an int")
+    return value
 
 
-def _field_value(field: Sequence | Mapping):
+def _field_value(field: Sequence[object] | Mapping[str, object]) -> Any:
     if isinstance(field, Mapping):
         return field.get("propValue")
     return field[1] if len(field) > 1 else None
 
 
-def _field_length(field: Sequence | Mapping) -> int | None:
+def _field_length(field: Sequence[object] | Mapping[str, object]) -> int | None:
     if isinstance(field, Mapping):
-        return field.get("propLength")
-    return field[2] if len(field) > 2 else None
+        value = field.get("propLength")
+        if value is None:
+            return None
+        if not isinstance(value, int):
+            raise TypeError("propLength must be an int")
+        return value
+    value = field[2] if len(field) > 2 else None
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise TypeError("propLength must be an int")
+    return value
 
 
-def get_series_size(schema: Iterable[Sequence | Mapping]) -> int:
+def get_series_size(schema: Iterable[Sequence[object] | Mapping[str, object]]) -> int:
     size = 0
     for field in schema:
         prop_type = _field_type(field)
@@ -99,7 +115,7 @@ def get_series_size(schema: Iterable[Sequence | Mapping]) -> int:
 
 class SeriesCodec:
     @staticmethod
-    def serialize(fields: Sequence[Sequence | Mapping]) -> bytes:
+    def serialize(fields: Sequence[Sequence[object] | Mapping[str, object]]) -> bytes:
         chunks: list[bytes] = []
         for field in fields:
             prop_type = _field_type(field)
@@ -144,8 +160,12 @@ class SeriesCodec:
         return b"".join(chunks)
 
     @staticmethod
-    def parse(buffer: bytes, schema: Sequence[Sequence | Mapping], offset: int = 0) -> list:
-        values: list = []
+    def parse(
+        buffer: bytes,
+        schema: Sequence[Sequence[object] | Mapping[str, object]],
+        offset: int = 0,
+    ) -> list[Any]:
+        values: list[Any] = []
         cursor = offset
         for field in schema:
             prop_type = _field_type(field)
@@ -200,5 +220,9 @@ class SeriesCodec:
         return values
 
     @staticmethod
-    def parse_at(buffer: bytes, schema: Sequence[Sequence | Mapping], offset: int = 0) -> list:
+    def parse_at(
+        buffer: bytes,
+        schema: Sequence[Sequence[object] | Mapping[str, object]],
+        offset: int = 0,
+    ) -> list[Any]:
         return SeriesCodec.parse(buffer, schema, offset)

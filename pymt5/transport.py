@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 import websockets
+from websockets.asyncio.client import ClientConnection
 
 from pymt5.constants import CMD_BOOTSTRAP, DEFAULT_COMMAND_TIMEOUT, DEFAULT_TOKEN_LENGTH, VALID_COMMANDS
 from pymt5.crypto import AESCipher, initial_cipher
@@ -25,13 +26,13 @@ class MT5WebSocketTransport:
     def __init__(self, uri: str, timeout: float = DEFAULT_COMMAND_TIMEOUT):
         self.uri = uri
         self.timeout = timeout
-        self.ws = None
+        self.ws: ClientConnection | None = None
         self.is_ready = False
         self.token = bytes(DEFAULT_TOKEN_LENGTH)
         self.cipher: AESCipher = initial_cipher()
-        self._recv_task: asyncio.Task | None = None
+        self._recv_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
-        self._pending: dict[int, deque[asyncio.Future]] = defaultdict(deque)
+        self._pending: dict[int, deque[asyncio.Future[CommandResult]]] = defaultdict(deque)
         self._listeners: dict[int, set[Callable[[CommandResult], Awaitable[None] | None]]] = defaultdict(set)
         self._on_disconnect: Callable[[], None] | None = None
 
@@ -97,7 +98,7 @@ class MT5WebSocketTransport:
         if self.ws is None:
             raise RuntimeError("websocket not connected")
         async with self._lock:
-            future: asyncio.Future = asyncio.get_running_loop().create_future()
+            future: asyncio.Future[CommandResult] = asyncio.get_running_loop().create_future()
             self._pending[command].append(future)
             inner = build_command(command, payload)
             encrypted = self.cipher.encrypt(inner)

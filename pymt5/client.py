@@ -116,6 +116,9 @@ from pymt5.transport import CommandResult, MT5WebSocketTransport
 
 logger = logging.getLogger("pymt5.client")
 
+Record = dict[str, Any]
+RecordList = list[Record]
+
 
 @dataclass
 class TradeResult:
@@ -424,7 +427,7 @@ class MT5WebClient:
         ])
         return await self.transport.send_command(CMD_VERIFY_CODE, payload)
 
-    async def get_account(self) -> dict:
+    async def get_account(self) -> Record:
         """Get full account information (cmd=3): balance, equity, margin, leverage, etc.
 
         Returns a dict with all account fields. This is the proper way to get
@@ -456,7 +459,7 @@ class MT5WebClient:
         logger.info("loaded %d symbol groups", len(groups))
         return groups
 
-    async def get_spreads(self, symbol_ids: list[int] | None = None) -> list[dict]:
+    async def get_spreads(self, symbol_ids: list[int] | None = None) -> RecordList:
         """Request spread data (cmd=20).
 
         Args:
@@ -507,7 +510,7 @@ class MT5WebClient:
         ])
         return await self.transport.send_command(CMD_NOTIFY, payload)
 
-    async def get_corporate_links(self) -> list[dict]:
+    async def get_corporate_links(self) -> RecordList:
         """Get broker corporate links (cmd=44): support, education, social, etc.
 
         Returns list of dicts with keys: link_type, url, label, flags, icon_data.
@@ -583,7 +586,7 @@ class MT5WebClient:
 
     # ---- Market Data ----
 
-    async def get_symbols(self, use_gzip: bool = True) -> list[dict]:
+    async def get_symbols(self, use_gzip: bool = True) -> RecordList:
         if use_gzip:
             result = await self.transport.send_command(CMD_GET_SYMBOLS_GZIP)
             if result.body and len(result.body) > 4:
@@ -594,7 +597,7 @@ class MT5WebClient:
         result = await self.transport.send_command(CMD_GET_SYMBOLS)
         return _parse_counted_records(result.body, SYMBOL_BASIC_SCHEMA, SYMBOL_BASIC_FIELD_NAMES)
 
-    async def get_full_symbol_info(self, symbol: str) -> dict | None:
+    async def get_full_symbol_info(self, symbol: str) -> Record | None:
         """Get detailed symbol specification (cmd=18): contract_size, tick_size, tick_value,
         volume_min/max/step, margin_initial/maintenance, spread, currencies, etc.
 
@@ -647,7 +650,7 @@ class MT5WebClient:
         await self.subscribe_ticks(ids)
         return ids
 
-    def on_tick(self, callback: Callable[[list[dict]], None]) -> None:
+    def on_tick(self, callback: Callable[[RecordList], None]) -> None:
         tick_size = get_series_size(TICK_SCHEMA)
         def _handler(result: CommandResult) -> None:
             count = len(result.body) // tick_size
@@ -666,7 +669,7 @@ class MT5WebClient:
 
     async def get_rates(
         self, symbol: str, period_minutes: int, from_ts: int, to_ts: int
-    ) -> list[dict]:
+    ) -> RecordList:
         """Get kline/rate bars.
 
         Args:
@@ -704,7 +707,7 @@ class MT5WebClient:
 
     # ---- Account / Positions / Orders ----
 
-    async def get_positions_and_orders(self) -> dict:
+    async def get_positions_and_orders(self) -> dict[str, RecordList]:
         result = await self.transport.send_command(CMD_GET_POSITIONS_ORDERS)
         body = result.body
         positions = _parse_counted_records(body, POSITION_SCHEMA, POSITION_FIELD_NAMES)
@@ -716,7 +719,7 @@ class MT5WebClient:
 
     async def get_trade_history(
         self, from_ts: int = 0, to_ts: int = 0
-    ) -> dict:
+    ) -> dict[str, RecordList]:
         payload = struct.pack("<ii", from_ts, to_ts)
         result = await self.transport.send_command(CMD_GET_TRADE_HISTORY, payload)
         body = result.body
@@ -736,17 +739,17 @@ class MT5WebClient:
 
     # ---- Convenience Wrappers ----
 
-    async def get_positions(self) -> list[dict]:
+    async def get_positions(self) -> RecordList:
         """Get open positions only."""
         data = await self.get_positions_and_orders()
         return data["positions"]
 
-    async def get_orders(self) -> list[dict]:
+    async def get_orders(self) -> RecordList:
         """Get pending orders only."""
         data = await self.get_positions_and_orders()
         return data["orders"]
 
-    async def get_deals(self, from_ts: int = 0, to_ts: int = 0) -> list[dict]:
+    async def get_deals(self, from_ts: int = 0, to_ts: int = 0) -> RecordList:
         """Get closed deals only."""
         data = await self.get_trade_history(from_ts, to_ts)
         return data["deals"]
@@ -792,7 +795,7 @@ class MT5WebClient:
 
     # ---- Push Event Handling ----
 
-    def on_position_update(self, callback: Callable[[list[dict]], None]) -> None:
+    def on_position_update(self, callback: Callable[[RecordList], None]) -> None:
         """Register callback for position change push notifications.
 
         The server pushes cmd=4 data when positions or orders change.
@@ -806,7 +809,7 @@ class MT5WebClient:
                 logger.error("position update parse error: %s", exc)
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
 
-    def on_order_update(self, callback: Callable[[list[dict]], None]) -> None:
+    def on_order_update(self, callback: Callable[[RecordList], None]) -> None:
         """Register callback for order change push notifications.
 
         Parses orders from the same cmd=4 push.
@@ -823,7 +826,7 @@ class MT5WebClient:
                 logger.error("order update parse error: %s", exc)
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
 
-    def on_trade_update(self, callback: Callable[[dict], None]) -> None:
+    def on_trade_update(self, callback: Callable[[dict[str, RecordList]], None]) -> None:
         """Register callback for combined position+order push notifications.
 
         Parses both positions and orders from cmd=4 push into a single dict
@@ -851,7 +854,7 @@ class MT5WebClient:
         """
         self.transport.on(CMD_SYMBOL_UPDATE_PUSH, callback)
 
-    def on_account_update(self, callback: Callable[[dict], None]) -> None:
+    def on_account_update(self, callback: Callable[[Record], None]) -> None:
         """Register callback for account update push notifications (cmd=14).
 
         Server pushes account balance/margin/equity changes in real-time.
@@ -872,7 +875,7 @@ class MT5WebClient:
         """
         self.transport.on(CMD_LOGIN_STATUS_PUSH, callback)
 
-    def on_symbol_details(self, callback: Callable[[list[dict]], None]) -> None:
+    def on_symbol_details(self, callback: Callable[[RecordList], None]) -> None:
         """Register callback for extended symbol quote data (cmd=17).
 
         Receives detailed quote data including options greeks (delta, gamma, theta,
@@ -899,7 +902,7 @@ class MT5WebClient:
                 logger.error("symbol details parse error: %s", exc)
         self.transport.on(CMD_SYMBOL_DETAILS_PUSH, _handler)
 
-    def on_trade_result(self, callback: Callable[[dict], None]) -> None:
+    def on_trade_result(self, callback: Callable[[Record], None]) -> None:
         """Register callback for async trade execution results (cmd=19).
 
         Server pushes trade results asynchronously. Callback receives a dict
@@ -922,7 +925,7 @@ class MT5WebClient:
                 logger.error("trade result push parse error: %s", exc)
         self.transport.on(CMD_TRADE_RESULT_PUSH, _handler)
 
-    def on_trade_transaction(self, callback: Callable[[dict], None]) -> None:
+    def on_trade_transaction(self, callback: Callable[[Record], None]) -> None:
         """Register callback for trade update push (cmd=10).
 
         Receives real-time trade state changes:
@@ -970,7 +973,7 @@ class MT5WebClient:
                 logger.error("trade transaction push parse error: %s", exc)
         self.transport.on(CMD_TRADE_UPDATE_PUSH, _handler)
 
-    def on_book_update(self, callback: Callable[[list[dict]], None]) -> None:
+    def on_book_update(self, callback: Callable[[RecordList], None]) -> None:
         """Register callback for order book / DOM push (cmd=23).
 
         Receives list of dicts, each with 'symbol_id', 'bids', 'asks'.
@@ -1582,7 +1585,7 @@ class MT5WebClient:
         return SeriesCodec.serialize(fields)
 
 
-def _parse_account_response(body: bytes) -> dict:
+def _parse_account_response(body: bytes) -> Record:
     """Parse the cmd=3 / cmd=14 account response.
 
     The response has a complex multi-section format:
@@ -1601,7 +1604,7 @@ def _parse_account_response(body: bytes) -> dict:
 
     if not body or len(body) < 97:
         return {}
-    result: dict[str, Any] = {}
+    result: Record = {}
     try:
         result["balance"] = struct.unpack_from("<d", body, 9)[0]
         result["credit"] = struct.unpack_from("<d", body, 17)[0]
@@ -1618,7 +1621,7 @@ def _parse_account_response(body: bytes) -> dict:
     return result
 
 
-def _parse_rate_bars(body: bytes) -> list[dict]:
+def _parse_rate_bars(body: bytes | None) -> RecordList:
     if not body:
         return []
     bar_size_std = get_series_size(RATE_BAR_SCHEMA)
@@ -1640,8 +1643,10 @@ def _parse_rate_bars(body: bytes) -> list[dict]:
 
 
 def _parse_counted_records(
-    body: bytes, schema: list[dict], field_names: list[str]
-) -> list[dict]:
+    body: bytes,
+    schema: list[dict[str, int]],
+    field_names: list[str],
+) -> RecordList:
     if not body or len(body) < 4:
         return []
     count = struct.unpack_from("<I", body, 0)[0]
