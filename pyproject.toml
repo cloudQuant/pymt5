@@ -4,11 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymt5"
-version = "0.1.0"
-description = "Python client for MT5 Web Terminal via reverse-engineered WebSocket protocol"
+version = "0.5.0"
+description = "Python client for MT5 Web Terminal via reverse-engineered WebSocket binary protocol"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.9"
+requires-python = ">=3.11"
+authors = [
+    {name = "cloudQuant"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "websockets>=12.0",
     "aiohttp>=3.9",
@@ -19,7 +36,28 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "mypy>=1.0",
 ]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+    "sphinx-autodoc-typehints>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/cloudQuant/pymt5"
+Documentation = "https://pymt5.readthedocs.io"
+Repository = "https://github.com/cloudQuant/pymt5"
+Issues = "https://github.com/cloudQuant/pymt5/issues"
 
 [tool.setuptools.packages.find]
 include = ["pymt5*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true

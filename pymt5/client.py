@@ -7,10 +7,16 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from pymt5.constants import (
+    CMD_ACCOUNT_UPDATE_PUSH,
+    CMD_BOOK_PUSH,
     CMD_CHANGE_PASSWORD,
+    CMD_GET_ACCOUNT,
+    CMD_GET_CORPORATE_LINKS,
     CMD_GET_FULL_SYMBOLS,
     CMD_GET_POSITIONS_ORDERS,
     CMD_GET_RATES,
+    CMD_GET_SPREADS,
+    CMD_GET_SYMBOL_GROUPS,
     CMD_GET_SYMBOLS,
     CMD_GET_SYMBOLS_GZIP,
     CMD_GET_TRADE_HISTORY,
@@ -18,22 +24,33 @@ from pymt5.constants import (
     CMD_LOGIN,
     CMD_LOGIN_STATUS_PUSH,
     CMD_LOGOUT,
+    CMD_NOTIFY,
+    CMD_OPEN_DEMO,
     CMD_PING,
+    CMD_SUBSCRIBE_BOOK,
     CMD_SUBSCRIBE_TICKS,
+    CMD_SYMBOL_DETAILS_PUSH,
     CMD_SYMBOL_UPDATE_PUSH,
     CMD_TICK_PUSH,
     CMD_TRADE_REQUEST,
+    CMD_TRADE_RESULT_PUSH,
+    CMD_TRADE_UPDATE_PUSH,
     CMD_TRADER_PARAMS,
+    CMD_VERIFY_CODE,
     DEFAULT_WS_URI,
     ORDER_FILLING_FOK,
     ORDER_TIME_GTC,
     ORDER_TYPE_BUY,
     ORDER_TYPE_BUY_LIMIT,
     ORDER_TYPE_BUY_STOP,
+    ORDER_TYPE_BUY_STOP_LIMIT,
     ORDER_TYPE_SELL,
     ORDER_TYPE_SELL_LIMIT,
     ORDER_TYPE_SELL_STOP,
+    ORDER_TYPE_SELL_STOP_LIMIT,
     PERIOD_MAP,
+    POSITION_TYPE_BUY,
+    POSITION_TYPE_SELL,
     PROP_BYTES,
     PROP_F64,
     PROP_FIXED_STRING,
@@ -41,6 +58,7 @@ from pymt5.constants import (
     PROP_U16,
     PROP_U32,
     PROP_U64,
+    TRADE_ACTION_CLOSE_BY,
     TRADE_ACTION_DEAL,
     TRADE_ACTION_MODIFY,
     TRADE_ACTION_PENDING,
@@ -54,6 +72,14 @@ from pymt5.constants import (
 from pymt5.helpers import build_client_id, bytes_to_hex
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
+    ACCOUNT_BASE_FIELD_NAMES,
+    ACCOUNT_BASE_SCHEMA,
+    BOOK_HEADER_FIELD_NAMES,
+    BOOK_HEADER_SCHEMA,
+    BOOK_LEVEL_FIELD_NAMES,
+    BOOK_LEVEL_SCHEMA,
+    CORPORATE_LINK_FIELD_NAMES,
+    CORPORATE_LINK_SCHEMA,
     DEAL_FIELD_NAMES,
     DEAL_SCHEMA,
     FULL_SYMBOL_FIELD_NAMES,
@@ -63,12 +89,28 @@ from pymt5.schemas import (
     POSITION_FIELD_NAMES,
     POSITION_SCHEMA,
     RATE_BAR_FIELD_NAMES,
+    RATE_BAR_FIELD_NAMES_EXT,
     RATE_BAR_SCHEMA,
+    RATE_BAR_SCHEMA_EXT,
+    SPREAD_FIELD_NAMES,
+    SPREAD_SCHEMA,
     SYMBOL_BASIC_FIELD_NAMES,
     SYMBOL_BASIC_SCHEMA,
+    SYMBOL_DETAILS_FIELD_NAMES,
+    SYMBOL_DETAILS_SCHEMA,
+    SYMBOL_GROUP_FIELD_NAMES,
+    SYMBOL_GROUP_SCHEMA,
     TICK_FIELD_NAMES,
     TICK_SCHEMA,
     TRADE_REQUEST_SCHEMA,
+    TRADE_RESULT_PUSH_FIELD_NAMES,
+    TRADE_RESULT_PUSH_SCHEMA,
+    TRADE_RESULT_RESPONSE_FIELD_NAMES,
+    TRADE_RESULT_RESPONSE_SCHEMA,
+    TRADE_TRANSACTION_FIELD_NAMES,
+    TRADE_TRANSACTION_SCHEMA,
+    TRADE_UPDATE_BALANCE_FIELD_NAMES,
+    TRADE_UPDATE_BALANCE_SCHEMA,
 )
 from pymt5.transport import CommandResult, MT5WebSocketTransport
 
@@ -113,6 +155,7 @@ class AccountInfo:
     credit: float = 0.0
     leverage: int = 0
     currency: str = ""
+    server: str = ""
     positions_count: int = 0
     orders_count: int = 0
 
@@ -367,6 +410,140 @@ class MT5WebClient:
         result = await self.transport.send_command(CMD_CHANGE_PASSWORD, payload)
         return int.from_bytes(result.body[:4], "little", signed=True)
 
+    async def verify_code(self, code: str) -> CommandResult:
+        """Send a verification code (cmd=27), e.g. for two-factor authentication.
+
+        Args:
+            code: The verification/OTP code string.
+
+        Returns:
+            Raw CommandResult with server response.
+        """
+        payload = SeriesCodec.serialize([
+            (PROP_FIXED_STRING, code[:32], 64),
+        ])
+        return await self.transport.send_command(CMD_VERIFY_CODE, payload)
+
+    async def get_account(self) -> dict:
+        """Get full account information (cmd=3): balance, equity, margin, leverage, etc.
+
+        Returns a dict with all account fields. This is the proper way to get
+        balance/equity/margin information from the Web Terminal.
+
+        The response has a complex multi-section format (header + trade settings).
+        """
+        result = await self.transport.send_command(CMD_GET_ACCOUNT)
+        return _parse_account_response(result.body)
+
+    async def get_symbol_groups(self) -> list[str]:
+        """Get symbol type/group names (cmd=9), e.g. 'Forex', 'Crypto', 'Indices'.
+
+        Returns list of group name strings.
+        """
+        result = await self.transport.send_command(CMD_GET_SYMBOL_GROUPS)
+        if not result.body or len(result.body) < 4:
+            return []
+        count = struct.unpack_from("<I", result.body, 0)[0]
+        group_size = get_series_size(SYMBOL_GROUP_SCHEMA)
+        groups = []
+        offset = 4
+        for _ in range(count):
+            if offset + group_size > len(result.body):
+                break
+            vals = SeriesCodec.parse_at(result.body, SYMBOL_GROUP_SCHEMA, offset)
+            groups.append(vals[0])
+            offset += group_size
+        logger.info("loaded %d symbol groups", len(groups))
+        return groups
+
+    async def get_spreads(self, symbol_ids: list[int] | None = None) -> list[dict]:
+        """Request spread data (cmd=20).
+
+        Args:
+            symbol_ids: Optional list of symbol IDs to query. If None, sends empty payload.
+
+        Returns:
+            List of spread dicts with keys: spread_id, flags, trade_symbol, param1, param2, spread_value.
+        """
+        if symbol_ids:
+            payload = struct.pack(f"<{len(symbol_ids) + 1}I", len(symbol_ids), *symbol_ids)
+        else:
+            payload = b""
+        result = await self.transport.send_command(CMD_GET_SPREADS, payload)
+        return _parse_counted_records(result.body, SPREAD_SCHEMA, SPREAD_FIELD_NAMES)
+
+    async def open_demo(
+        self,
+        *,
+        password: str = "",
+        otp: str = "",
+        cid: bytes | None = None,
+        version: int = 0,
+    ) -> CommandResult:
+        """Request demo account creation (cmd=30).
+
+        Returns:
+            Raw CommandResult with server response (account details).
+        """
+        payload = self._build_init_payload(
+            version=version,
+            password=password,
+            otp=otp,
+            cid=cid,
+        )
+        return await self.transport.send_command(CMD_OPEN_DEMO, payload)
+
+    async def send_notification(self, message: str) -> CommandResult:
+        """Send a notification message to the server (cmd=42).
+
+        Args:
+            message: Notification text.
+
+        Returns:
+            Raw CommandResult with server acknowledgement.
+        """
+        payload = SeriesCodec.serialize([
+            (PROP_FIXED_STRING, message[:128], 256),
+        ])
+        return await self.transport.send_command(CMD_NOTIFY, payload)
+
+    async def get_corporate_links(self) -> list[dict]:
+        """Get broker corporate links (cmd=44): support, education, social, etc.
+
+        Returns list of dicts with keys: link_type, url, label, flags, icon_data.
+        """
+        result = await self.transport.send_command(CMD_GET_CORPORATE_LINKS)
+        return _parse_counted_records(result.body, CORPORATE_LINK_SCHEMA, CORPORATE_LINK_FIELD_NAMES)
+
+    async def subscribe_book(self, symbol_ids: list[int]) -> None:
+        """Subscribe to order book / depth-of-market for given symbols (cmd=22).
+
+        After subscribing, the server pushes DOM updates via cmd=23.
+        Register a handler with on_book_update() to receive them.
+        """
+        payload = struct.pack(f"<{len(symbol_ids)}I", *symbol_ids)
+        await self.transport.send_command(CMD_SUBSCRIBE_BOOK, payload)
+        logger.info("subscribed to order book for %d symbols", len(symbol_ids))
+
+    async def subscribe_book_by_name(self, symbol_names: list[str]) -> list[int]:
+        """Subscribe to order book by symbol names (requires load_symbols first).
+
+        Returns list of resolved symbol IDs.
+        Raises ValueError if any symbol name is not found in cache.
+        """
+        ids = []
+        missing = []
+        for name in symbol_names:
+            info = self._symbols.get(name)
+            if info is None:
+                missing.append(name)
+            else:
+                ids.append(info.symbol_id)
+        if missing:
+            raise ValueError(f"symbols not found in cache (call load_symbols first): {missing}")
+        await self.subscribe_book(ids)
+        return ids
+
     # ---- Symbol Cache ----
 
     async def load_symbols(self, use_gzip: bool = True) -> dict[str, SymbolInfo]:
@@ -575,16 +752,34 @@ class MT5WebClient:
         return data["deals"]
 
     async def get_account_summary(self) -> AccountInfo:
-        """Compute account summary from current positions.
+        """Get account summary using get_account (cmd=3) and positions/orders.
 
-        Note: balance is estimated from trader_params + deal history if available.
-        Profit and equity are computed from open positions.
-        This is a best-effort approximation — the MT5 Web Terminal protocol
-        does not expose a dedicated account_info command.
+        This uses the proper account info command to get balance, equity,
+        margin, leverage, etc., and supplements with position/order counts.
+        Falls back to computing from positions if cmd=3 fails.
         """
         data = await self.get_positions_and_orders()
         positions = data["positions"]
         orders = data["orders"]
+        try:
+            acct = await self.get_account()
+            if acct:
+                return AccountInfo(
+                    balance=acct.get("balance", 0.0),
+                    equity=acct.get("equity", 0.0),
+                    margin=acct.get("margin", 0.0),
+                    margin_free=acct.get("margin_free", 0.0),
+                    margin_level=acct.get("margin_level", 0.0),
+                    profit=acct.get("profit", 0.0),
+                    credit=acct.get("credit", 0.0),
+                    leverage=int(acct.get("leverage", 0)),
+                    currency=acct.get("currency", ""),
+                    server=acct.get("server", ""),
+                    positions_count=len(positions),
+                    orders_count=len(orders),
+                )
+        except Exception as exc:
+            logger.debug("get_account failed, falling back to positions: %s", exc)
         floating_profit = sum(p.get("profit", 0.0) for p in positions)
         floating_commission = sum(p.get("commission", 0.0) for p in positions)
         floating_swap = sum(p.get("storage", 0.0) for p in positions)
@@ -595,7 +790,7 @@ class MT5WebClient:
             orders_count=len(orders),
         )
 
-    # ---- Position / Order Push Handling ----
+    # ---- Push Event Handling ----
 
     def on_position_update(self, callback: Callable[[list[dict]], None]) -> None:
         """Register callback for position change push notifications.
@@ -627,6 +822,195 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("order update parse error: %s", exc)
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
+
+    def on_trade_update(self, callback: Callable[[dict], None]) -> None:
+        """Register callback for combined position+order push notifications.
+
+        Parses both positions and orders from cmd=4 push into a single dict
+        with keys 'positions' and 'orders'. More efficient than registering
+        separate on_position_update and on_order_update handlers.
+        """
+        def _handler(result: CommandResult) -> None:
+            try:
+                body = result.body
+                positions = _parse_counted_records(body, POSITION_SCHEMA, POSITION_FIELD_NAMES)
+                pos_size = get_series_size(POSITION_SCHEMA)
+                pos_count = struct.unpack_from("<I", body, 0)[0] if body else 0
+                order_offset = 4 + pos_count * pos_size
+                orders = _parse_counted_records(body[order_offset:], ORDER_SCHEMA, ORDER_FIELD_NAMES)
+                callback({"positions": positions, "orders": orders})
+            except Exception as exc:
+                logger.error("trade update parse error: %s", exc)
+        self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
+
+    def on_symbol_update(self, callback: Callable[[CommandResult], None]) -> None:
+        """Register callback for symbol update push notifications (cmd=13).
+
+        The server pushes symbol changes (e.g. spread updates, trading hours).
+        Raw CommandResult is passed since the exact schema varies.
+        """
+        self.transport.on(CMD_SYMBOL_UPDATE_PUSH, callback)
+
+    def on_account_update(self, callback: Callable[[dict], None]) -> None:
+        """Register callback for account update push notifications (cmd=14).
+
+        Server pushes account balance/margin/equity changes in real-time.
+        Callback receives a dict with the same fields as get_account().
+        """
+        def _handler(result: CommandResult) -> None:
+            try:
+                data = _parse_account_response(result.body)
+                callback(data)
+            except Exception as exc:
+                logger.error("account update parse error: %s", exc)
+        self.transport.on(CMD_ACCOUNT_UPDATE_PUSH, _handler)
+
+    def on_login_status(self, callback: Callable[[CommandResult], None]) -> None:
+        """Register callback for login status push notifications (cmd=15).
+
+        The server may push login status changes (e.g. forced logout, session expiry).
+        """
+        self.transport.on(CMD_LOGIN_STATUS_PUSH, callback)
+
+    def on_symbol_details(self, callback: Callable[[list[dict]], None]) -> None:
+        """Register callback for extended symbol quote data (cmd=17).
+
+        Receives detailed quote data including options greeks (delta, gamma, theta,
+        vega, rho, omega), session statistics, and price limits.
+        """
+        detail_size = get_series_size(SYMBOL_DETAILS_SCHEMA)
+        def _handler(result: CommandResult) -> None:
+            try:
+                count = len(result.body) // detail_size
+                details = []
+                offset = 0
+                for _ in range(count):
+                    if offset + detail_size > len(result.body):
+                        break
+                    vals = SeriesCodec.parse_at(result.body, SYMBOL_DETAILS_SCHEMA, offset)
+                    d = dict(zip(SYMBOL_DETAILS_FIELD_NAMES, vals))
+                    sym_info = self._symbols_by_id.get(d["symbol_id"])
+                    if sym_info:
+                        d["symbol"] = sym_info.name
+                    details.append(d)
+                    offset += detail_size
+                callback(details)
+            except Exception as exc:
+                logger.error("symbol details parse error: %s", exc)
+        self.transport.on(CMD_SYMBOL_DETAILS_PUSH, _handler)
+
+    def on_trade_result(self, callback: Callable[[dict], None]) -> None:
+        """Register callback for async trade execution results (cmd=19).
+
+        Server pushes trade results asynchronously. Callback receives a dict
+        with trade action details and execution result (retcode, order, price, etc.).
+        """
+        def _handler(result: CommandResult) -> None:
+            try:
+                body = result.body
+                action_size = get_series_size(TRADE_RESULT_PUSH_SCHEMA)
+                resp_size = get_series_size(TRADE_RESULT_RESPONSE_SCHEMA)
+                data: dict[str, Any] = {}
+                if len(body) >= action_size:
+                    vals = SeriesCodec.parse(body, TRADE_RESULT_PUSH_SCHEMA)
+                    data.update(zip(TRADE_RESULT_PUSH_FIELD_NAMES, vals))
+                if len(body) >= action_size + resp_size:
+                    resp_vals = SeriesCodec.parse_at(body, TRADE_RESULT_RESPONSE_SCHEMA, action_size)
+                    data["result"] = dict(zip(TRADE_RESULT_RESPONSE_FIELD_NAMES, resp_vals))
+                callback(data)
+            except Exception as exc:
+                logger.error("trade result push parse error: %s", exc)
+        self.transport.on(CMD_TRADE_RESULT_PUSH, _handler)
+
+    def on_trade_transaction(self, callback: Callable[[dict], None]) -> None:
+        """Register callback for trade update push (cmd=10).
+
+        Receives real-time trade state changes:
+        - type=2: Balance update with deals and positions arrays
+        - type!=2: Order transaction (add/update/delete)
+
+        Callback receives a dict with:
+        - 'update_type': 2 for balance update, other for transaction
+        - For balance updates: 'balance_info', 'deals', 'positions'
+        - For transactions: 'flag_mask', 'transaction_id', 'transaction_type', 'order'
+        """
+        def _handler(result: CommandResult) -> None:
+            try:
+                body = result.body
+                if len(body) < 4:
+                    return
+                update_type = struct.unpack_from("<I", body, 0)[0]
+                data: dict[str, Any] = {"update_type": update_type}
+                if update_type == 2:
+                    offset = 4
+                    balance_size = get_series_size(TRADE_UPDATE_BALANCE_SCHEMA)
+                    if len(body) >= offset + balance_size:
+                        vals = SeriesCodec.parse_at(body, TRADE_UPDATE_BALANCE_SCHEMA, offset)
+                        data["balance_info"] = dict(zip(TRADE_UPDATE_BALANCE_FIELD_NAMES, vals))
+                        offset += balance_size
+                    data["deals"] = _parse_counted_records(body[offset:], DEAL_SCHEMA, DEAL_FIELD_NAMES)
+                    deal_size = get_series_size(DEAL_SCHEMA)
+                    if len(body) > offset and len(body[offset:]) >= 4:
+                        deal_count = struct.unpack_from("<I", body, offset)[0]
+                        offset += 4 + deal_count * deal_size
+                    data["positions"] = _parse_counted_records(body[offset:], POSITION_SCHEMA, POSITION_FIELD_NAMES)
+                else:
+                    offset = 4
+                    txn_size = get_series_size(TRADE_TRANSACTION_SCHEMA)
+                    if len(body) >= offset + txn_size:
+                        vals = SeriesCodec.parse_at(body, TRADE_TRANSACTION_SCHEMA, offset)
+                        data.update(zip(TRADE_TRANSACTION_FIELD_NAMES, vals))
+                        offset += txn_size
+                    order_size = get_series_size(ORDER_SCHEMA)
+                    if len(body) >= offset + order_size:
+                        order_vals = SeriesCodec.parse_at(body, ORDER_SCHEMA, offset)
+                        data["order"] = dict(zip(ORDER_FIELD_NAMES, order_vals))
+                callback(data)
+            except Exception as exc:
+                logger.error("trade transaction push parse error: %s", exc)
+        self.transport.on(CMD_TRADE_UPDATE_PUSH, _handler)
+
+    def on_book_update(self, callback: Callable[[list[dict]], None]) -> None:
+        """Register callback for order book / DOM push (cmd=23).
+
+        Receives list of dicts, each with 'symbol_id', 'bids', 'asks'.
+        bids/asks are lists of {'price': float, 'volume': int}.
+        """
+        header_size = get_series_size(BOOK_HEADER_SCHEMA)
+        level_size = get_series_size(BOOK_LEVEL_SCHEMA)
+        def _handler(result: CommandResult) -> None:
+            try:
+                body = result.body
+                if len(body) < 4:
+                    return
+                count = struct.unpack_from("<I", body, 0)[0]
+                entries = []
+                offset = 4
+                for _ in range(count):
+                    if offset + header_size > len(body):
+                        break
+                    hdr_vals = SeriesCodec.parse_at(body, BOOK_HEADER_SCHEMA, offset)
+                    hdr = dict(zip(BOOK_HEADER_FIELD_NAMES, hdr_vals))
+                    offset += header_size
+                    total_levels = hdr["bid_count"] + hdr["ask_count"]
+                    levels = []
+                    for _ in range(total_levels):
+                        if offset + level_size > len(body):
+                            break
+                        lv = SeriesCodec.parse_at(body, BOOK_LEVEL_SCHEMA, offset)
+                        levels.append(dict(zip(BOOK_LEVEL_FIELD_NAMES, lv)))
+                        offset += level_size
+                    bids = levels[:hdr["bid_count"]]
+                    asks = levels[hdr["bid_count"]:]
+                    entry: dict[str, Any] = {"symbol_id": hdr["symbol_id"], "bids": bids, "asks": asks}
+                    sym_info = self._symbols_by_id.get(hdr["symbol_id"])
+                    if sym_info:
+                        entry["symbol"] = sym_info.name
+                    entries.append(entry)
+                callback(entries)
+            except Exception as exc:
+                logger.error("book update parse error: %s", exc)
+        self.transport.on(CMD_BOOK_PUSH, _handler)
 
     # ---- Trading ----
 
@@ -687,7 +1071,7 @@ class MT5WebClient:
             return tr
         retcode = struct.unpack_from("<I", body, 0)[0]
         desc = TRADE_RETCODE_DESCRIPTIONS.get(retcode, f"Unknown retcode {retcode}")
-        success = retcode in (TRADE_RETCODE_DONE, TRADE_RETCODE_DONE_PARTIAL, TRADE_RETCODE_PLACED)
+        success = retcode in (0, TRADE_RETCODE_DONE, TRADE_RETCODE_DONE_PARTIAL, TRADE_RETCODE_PLACED)
         # Parse extended fields if response is large enough
         resp_schema_size = get_series_size(TRADE_RESPONSE_SCHEMA)
         if len(body) >= resp_schema_size:
@@ -718,14 +1102,14 @@ class MT5WebClient:
         return info.digits if info else 5
 
     @staticmethod
-    def _volume_to_lots(volume: float, digits: int = 2) -> int:
-        """Convert lots (e.g. 0.01) to MT5 integer volume (e.g. 100 for 2-digit lots).
+    def _volume_to_lots(volume: float, precision: int = 8) -> int:
+        """Convert lots (e.g. 0.01) to MT5 integer volume.
 
         MT5 Web Terminal uses integer volumes where the value represents
-        volume * 10^volume_digits. For most brokers volume_digits=2,
-        meaning 0.01 lot = 100, 0.1 lot = 1000, 1.0 lot = 10000.
+        volume * 10^precision. The default precision=8 is based on the
+        MetaQuotes demo server (1.0 lot = 100000000).
         """
-        return int(round(volume * (10 ** digits)))
+        return int(round(volume * (10 ** precision)))
 
     async def buy_market(
         self,
@@ -917,6 +1301,86 @@ class MT5WebClient:
             type_reason=magic,
         )
 
+    async def buy_stop_limit(
+        self,
+        symbol: str,
+        volume: float,
+        price: float,
+        stop_limit_price: float,
+        *,
+        sl: float = 0.0,
+        tp: float = 0.0,
+        comment: str = "",
+        filling: int = ORDER_FILLING_FOK,
+        time_type: int = ORDER_TIME_GTC,
+        expiration: int = 0,
+        digits: int | None = None,
+        magic: int = 0,
+    ) -> TradeResult:
+        """Place a buy stop limit pending order.
+
+        Args:
+            price: Stop trigger price (price_trigger).
+            stop_limit_price: Limit price placed after stop triggers (price_order).
+        """
+        d = self._resolve_digits(symbol, digits)
+        return await self.trade_request(
+            trade_action=TRADE_ACTION_PENDING,
+            symbol=symbol,
+            volume=self._volume_to_lots(volume),
+            digits=d,
+            trade_type=ORDER_TYPE_BUY_STOP_LIMIT,
+            type_filling=filling,
+            type_time=time_type,
+            price_order=stop_limit_price,
+            price_trigger=price,
+            price_sl=sl,
+            price_tp=tp,
+            comment=comment,
+            time_expiration=expiration,
+            type_reason=magic,
+        )
+
+    async def sell_stop_limit(
+        self,
+        symbol: str,
+        volume: float,
+        price: float,
+        stop_limit_price: float,
+        *,
+        sl: float = 0.0,
+        tp: float = 0.0,
+        comment: str = "",
+        filling: int = ORDER_FILLING_FOK,
+        time_type: int = ORDER_TIME_GTC,
+        expiration: int = 0,
+        digits: int | None = None,
+        magic: int = 0,
+    ) -> TradeResult:
+        """Place a sell stop limit pending order.
+
+        Args:
+            price: Stop trigger price (price_trigger).
+            stop_limit_price: Limit price placed after stop triggers (price_order).
+        """
+        d = self._resolve_digits(symbol, digits)
+        return await self.trade_request(
+            trade_action=TRADE_ACTION_PENDING,
+            symbol=symbol,
+            volume=self._volume_to_lots(volume),
+            digits=d,
+            trade_type=ORDER_TYPE_SELL_STOP_LIMIT,
+            type_filling=filling,
+            type_time=time_type,
+            price_order=stop_limit_price,
+            price_trigger=price,
+            price_sl=sl,
+            price_tp=tp,
+            comment=comment,
+            time_expiration=expiration,
+            type_reason=magic,
+        )
+
     async def close_position(
         self,
         symbol: str,
@@ -932,10 +1396,15 @@ class MT5WebClient:
     ) -> TradeResult:
         """Close a position by placing an opposite market order.
 
-        If order_type is not specified, it defaults to SELL for closing a BUY position.
+        If order_type is not specified, auto-detects direction from open positions:
+        BUY positions are closed with SELL and vice versa. Falls back to SELL if
+        the position is not found in the current position list.
         """
         d = self._resolve_digits(symbol, digits)
-        ot = order_type if order_type is not None else ORDER_TYPE_SELL
+        if order_type is not None:
+            ot = order_type
+        else:
+            ot = await self._detect_close_direction(position_id)
         return await self.trade_request(
             trade_action=TRADE_ACTION_DEAL,
             symbol=symbol,
@@ -946,6 +1415,45 @@ class MT5WebClient:
             deviation=deviation,
             comment=comment,
             position_id=position_id,
+            type_reason=magic,
+        )
+
+    async def _detect_close_direction(self, position_id: int) -> int:
+        """Detect the order type needed to close a position (opposite direction)."""
+        try:
+            positions = await self.get_positions()
+            for p in positions:
+                if p.get("position_id") == position_id:
+                    if p.get("trade_action") == POSITION_TYPE_SELL:
+                        return ORDER_TYPE_BUY
+                    return ORDER_TYPE_SELL
+        except Exception as exc:
+            logger.debug("failed to detect position direction: %s", exc)
+        return ORDER_TYPE_SELL
+
+    async def close_position_by(
+        self,
+        symbol: str,
+        position_id: int,
+        position_by: int,
+        *,
+        filling: int = ORDER_FILLING_FOK,
+        digits: int | None = None,
+        magic: int = 0,
+    ) -> TradeResult:
+        """Close a position by an opposite position (close-by).
+
+        This closes position_id using the opposite position position_by.
+        Both positions must be for the same symbol but in opposite directions.
+        """
+        d = self._resolve_digits(symbol, digits)
+        return await self.trade_request(
+            trade_action=TRADE_ACTION_CLOSE_BY,
+            symbol=symbol,
+            digits=d,
+            type_filling=filling,
+            position_id=position_id,
+            position_by=position_by,
             type_reason=magic,
         )
 
@@ -1074,18 +1582,59 @@ class MT5WebClient:
         return SeriesCodec.serialize(fields)
 
 
+def _parse_account_response(body: bytes) -> dict:
+    """Parse the cmd=3 / cmd=14 account response.
+
+    The response has a complex multi-section format:
+    - byte 0: u8 flags
+    - offset 1: u32 param (possibly related to account group)
+    - offset 5: u32 param2
+    - offset 9: f64 balance
+    - offset 17: f64 credit
+    - offset 25: fixed_string[64] currency (UTF-16LE)
+    - offset 89: u32 trade_mode
+    - offset 93: u32 leverage
+    - offset 97: fixed_string name (UTF-16LE, variable end)
+    Additional sections follow for trade settings and margin tiers.
+    """
+    from pymt5.helpers import decode_utf16le
+
+    if not body or len(body) < 97:
+        return {}
+    result: dict[str, Any] = {}
+    try:
+        result["balance"] = struct.unpack_from("<d", body, 9)[0]
+        result["credit"] = struct.unpack_from("<d", body, 17)[0]
+        result["currency"] = decode_utf16le(body[25:89])
+        result["trade_mode"] = struct.unpack_from("<I", body, 89)[0]
+        result["leverage"] = struct.unpack_from("<I", body, 93)[0]
+        if len(body) > 97:
+            name_end = min(97 + 128, len(body))
+            result["name"] = decode_utf16le(body[97:name_end])
+        # Equity = balance + credit + floating P/L (not directly in response header)
+        result["equity"] = result["balance"] + result["credit"]
+    except Exception as exc:
+        logger.debug("account response partial parse: %s", exc)
+    return result
+
+
 def _parse_rate_bars(body: bytes) -> list[dict]:
     if not body:
         return []
-    bar_size = get_series_size(RATE_BAR_SCHEMA)
+    bar_size_std = get_series_size(RATE_BAR_SCHEMA)
+    bar_size_ext = get_series_size(RATE_BAR_SCHEMA_EXT)
+    if len(body) % bar_size_ext == 0 and bar_size_ext != bar_size_std:
+        schema, names, bar_size = RATE_BAR_SCHEMA_EXT, RATE_BAR_FIELD_NAMES_EXT, bar_size_ext
+    else:
+        schema, names, bar_size = RATE_BAR_SCHEMA, RATE_BAR_FIELD_NAMES, bar_size_std
     count = len(body) // bar_size
     bars = []
     offset = 0
     for _ in range(count):
         if offset + bar_size > len(body):
             break
-        vals = SeriesCodec.parse_at(body, RATE_BAR_SCHEMA, offset)
-        bars.append(dict(zip(RATE_BAR_FIELD_NAMES, vals)))
+        vals = SeriesCodec.parse_at(body, schema, offset)
+        bars.append(dict(zip(names, vals)))
         offset += bar_size
     return bars
 
