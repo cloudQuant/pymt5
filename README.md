@@ -317,7 +317,7 @@ Commands 21, 25, 33, 37, 39, 40, 43, 50, 52, 100-112 are accepted by the server 
 
 ## Documentation
 
-Full API documentation is available at **[pymt5.readthedocs.io](https://pymt5.readthedocs.io)**.
+Full API documentation is available at **[pymt5.readthedocs.io/en/latest](https://pymt5.readthedocs.io/en/latest/)**.
 
 To build docs locally:
 
