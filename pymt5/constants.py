@@ -1,0 +1,164 @@
+HEADER_BYTE_LENGTH = 8
+OUTER_PROTOCOL_VERSION = 1
+DEFAULT_WS_URI = "wss://web.metatrader.app/terminal"
+INITIAL_KEY_OBFUSCATED = "13ef13b2b76dd8:5795gdcfb2fdc1ge85bf768f54773d22fff996e3ge75g5:75"
+DEFAULT_TOKEN_LENGTH = 64
+DEFAULT_COMMAND_TIMEOUT = 30.0
+
+CMD_BOOTSTRAP = 0
+CMD_LOGOUT = 2
+CMD_GET_POSITIONS_ORDERS = 4
+CMD_GET_TRADE_HISTORY = 5
+CMD_GET_SYMBOLS = 6
+CMD_SUBSCRIBE_TICKS = 7
+CMD_TICK_PUSH = 8
+CMD_GET_RATES = 11
+CMD_TRADE_REQUEST = 12
+CMD_SYMBOL_UPDATE_PUSH = 13
+CMD_LOGIN_STATUS_PUSH = 15
+CMD_GET_FULL_SYMBOLS = 18
+CMD_GET_SPREADS = 20
+CMD_CHANGE_PASSWORD = 24
+CMD_VERIFY_CODE = 27
+CMD_LOGIN = 28
+CMD_INIT = 29
+CMD_OPEN_DEMO = 30
+CMD_GET_SYMBOLS_GZIP = 34
+CMD_TRADER_PARAMS = 41
+CMD_NOTIFY = 42
+CMD_PING = 51
+
+PERIOD_M1 = 1
+PERIOD_M5 = 5
+PERIOD_M15 = 15
+PERIOD_M30 = 30
+PERIOD_H1 = 16385
+PERIOD_H4 = 16388
+PERIOD_D1 = 16408
+PERIOD_W1 = 32769
+PERIOD_MN1 = 49153
+
+PERIOD_MAP = {
+    1: PERIOD_M1, 5: PERIOD_M5, 15: PERIOD_M15, 30: PERIOD_M30,
+    60: PERIOD_H1, 240: PERIOD_H4, 1440: PERIOD_D1,
+    10080: PERIOD_W1, 43200: PERIOD_MN1,
+}
+
+VALID_COMMANDS = frozenset({
+    0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17,
+    18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 33, 34,
+    37, 39, 40, 41, 42, 43, 44, 50, 51, 52, 100, 101, 102,
+    103, 104, 105, 106, 107, 108, 109, 110, 111, 112,
+})
+
+PROP_I8 = 1
+PROP_I16 = 2
+PROP_I32 = 3
+PROP_U8 = 4
+PROP_U16 = 5
+PROP_U32 = 6
+PROP_F32 = 7
+PROP_F64 = 8
+PROP_I64 = 17
+PROP_U64 = 18
+PROP_STRING = 10
+PROP_FIXED_STRING = 11
+PROP_BYTES = 12
+
+# ---- MT5 Trade Actions (trade_action field in trade_request) ----
+TRADE_ACTION_DEAL = 1        # Place a market order
+TRADE_ACTION_PENDING = 5     # Place a pending order
+TRADE_ACTION_SLTP = 6        # Modify SL/TP of a position
+TRADE_ACTION_MODIFY = 7      # Modify a pending order
+TRADE_ACTION_REMOVE = 8      # Remove a pending order
+TRADE_ACTION_CLOSE_BY = 10   # Close by opposite position
+
+# ---- MT5 Order Types ----
+ORDER_TYPE_BUY = 0
+ORDER_TYPE_SELL = 1
+ORDER_TYPE_BUY_LIMIT = 2
+ORDER_TYPE_SELL_LIMIT = 3
+ORDER_TYPE_BUY_STOP = 4
+ORDER_TYPE_SELL_STOP = 5
+ORDER_TYPE_BUY_STOP_LIMIT = 6
+ORDER_TYPE_SELL_STOP_LIMIT = 7
+
+# ---- MT5 Order Filling ----
+ORDER_FILLING_FOK = 0   # Fill or Kill
+ORDER_FILLING_IOC = 1   # Immediate or Cancel
+ORDER_FILLING_RETURN = 2  # Return (partial fill allowed)
+
+# ---- MT5 Order Time ----
+ORDER_TIME_GTC = 0       # Good till cancelled
+ORDER_TIME_DAY = 1       # Day order
+ORDER_TIME_SPECIFIED = 2 # Valid until specified time
+ORDER_TIME_SPECIFIED_DAY = 3
+
+# ---- MT5 Trade Return Codes ----
+TRADE_RETCODE_REQUOTE = 10004
+TRADE_RETCODE_REJECT = 10006
+TRADE_RETCODE_CANCEL = 10007
+TRADE_RETCODE_PLACED = 10008
+TRADE_RETCODE_DONE = 10009
+TRADE_RETCODE_DONE_PARTIAL = 10010
+TRADE_RETCODE_ERROR = 10011
+TRADE_RETCODE_TIMEOUT = 10012
+TRADE_RETCODE_INVALID = 10013
+TRADE_RETCODE_INVALID_VOLUME = 10014
+TRADE_RETCODE_INVALID_PRICE = 10015
+TRADE_RETCODE_INVALID_STOPS = 10016
+TRADE_RETCODE_TRADE_DISABLED = 10017
+TRADE_RETCODE_MARKET_CLOSED = 10018
+TRADE_RETCODE_NO_MONEY = 10019
+TRADE_RETCODE_PRICE_CHANGED = 10020
+TRADE_RETCODE_PRICE_OFF = 10021
+TRADE_RETCODE_INVALID_EXPIRATION = 10022
+TRADE_RETCODE_ORDER_CHANGED = 10023
+TRADE_RETCODE_TOO_MANY_REQUESTS = 10024
+TRADE_RETCODE_NO_CHANGES = 10025
+TRADE_RETCODE_SERVER_DISABLES_AT = 10026
+TRADE_RETCODE_CLIENT_DISABLES_AT = 10027
+TRADE_RETCODE_LOCKED = 10028
+TRADE_RETCODE_FROZEN = 10029
+TRADE_RETCODE_INVALID_FILL = 10030
+TRADE_RETCODE_CONNECTION = 10031
+TRADE_RETCODE_ONLY_REAL = 10032
+TRADE_RETCODE_LIMIT_ORDERS = 10033
+TRADE_RETCODE_LIMIT_VOLUME = 10034
+TRADE_RETCODE_INVALID_ORDER = 10035
+TRADE_RETCODE_POSITION_CLOSED = 10036
+
+TRADE_RETCODE_DESCRIPTIONS: dict[int, str] = {
+    10004: "Requote",
+    10006: "Request rejected",
+    10007: "Request cancelled by trader",
+    10008: "Order placed",
+    10009: "Request completed (done)",
+    10010: "Request partially completed",
+    10011: "Request processing error",
+    10012: "Request cancelled by timeout",
+    10013: "Invalid request",
+    10014: "Invalid volume",
+    10015: "Invalid price",
+    10016: "Invalid stops",
+    10017: "Trade disabled",
+    10018: "Market closed",
+    10019: "Not enough money",
+    10020: "Price changed",
+    10021: "No quotes for request processing",
+    10022: "Invalid order expiration",
+    10023: "Order state changed",
+    10024: "Too many requests",
+    10025: "No changes in request",
+    10026: "Auto-trading disabled by server",
+    10027: "Auto-trading disabled by client",
+    10028: "Request locked for processing",
+    10029: "Order/position frozen",
+    10030: "Invalid order filling type",
+    10031: "No connection with trade server",
+    10032: "Operation allowed only for live accounts",
+    10033: "Pending orders limit reached",
+    10034: "Volume limit for symbol reached",
+    10035: "Invalid or prohibited order type",
+    10036: "Position already closed",
+}
