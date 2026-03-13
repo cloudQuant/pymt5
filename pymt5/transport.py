@@ -3,7 +3,7 @@ import contextlib
 import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -40,16 +40,21 @@ class MT5WebSocketTransport:
         self.is_ready = False
         self.cipher = initial_cipher()
         logger.info("connecting to %s", self.uri)
+        connect_kwargs: dict[str, Any] = {
+            "ping_interval": None,
+            "max_size": None,
+            "open_timeout": self.timeout,
+            "additional_headers": {
+                "Origin": "https://web.metatrader.app",
+            },
+        }
+        # websockets >=15 auto-detects system proxy (proxy=True default)
+        # which breaks the MT5 binary protocol; bypass it explicitly.
+        import inspect as _inspect
+        if "proxy" in _inspect.signature(websockets.connect).parameters:
+            connect_kwargs["proxy"] = None
         self.ws = await asyncio.wait_for(
-            websockets.connect(
-                self.uri,
-                ping_interval=None,
-                max_size=None,
-                open_timeout=self.timeout,
-                additional_headers={
-                    "Origin": "https://web.metatrader.app",
-                },
-            ),
+            websockets.connect(self.uri, **connect_kwargs),
             timeout=self.timeout,
         )
         self._recv_task = asyncio.create_task(self._recv_loop())
