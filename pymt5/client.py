@@ -626,10 +626,15 @@ class MT5WebClient:
             return None
 
     async def subscribe_ticks(self, symbol_ids: list[int]) -> None:
-        payload = struct.pack(f"<{len(symbol_ids) + 1}I", len(symbol_ids), *symbol_ids)
+        # Accumulate rather than replace — MT5 subscribe replaces server-side,
+        # so we must always send the full set of desired subscriptions.
+        existing = set(getattr(self, "_subscribed_ids", None) or [])
+        merged = sorted(existing | set(symbol_ids))
+        payload = struct.pack(f"<{len(merged) + 1}I", len(merged), *merged)
         await self.transport.send_command(CMD_SUBSCRIBE_TICKS, payload)
-        self._subscribed_ids = list(symbol_ids)
-        logger.info("subscribed to %d symbol ids for ticks", len(symbol_ids))
+        self._subscribed_ids = merged
+        logger.info("subscribed to %d symbol ids for ticks (added %d new)",
+                     len(merged), len(set(symbol_ids) - existing))
 
     async def subscribe_symbols(self, symbol_names: list[str]) -> list[int]:
         """Subscribe to tick updates by symbol name (requires load_symbols first).
