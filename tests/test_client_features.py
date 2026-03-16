@@ -407,7 +407,8 @@ def test_full_symbol_schema_size():
 
 def test_package_exports():
     import pymt5
-    assert pymt5.__version__ == "0.5.0"
+    assert isinstance(pymt5.__version__, str)
+    assert len(pymt5.__version__) > 0
     assert hasattr(pymt5, "MT5WebClient")
     assert hasattr(pymt5, "TradeResult")
     assert hasattr(pymt5, "SymbolInfo")

@@ -195,15 +195,7 @@ DEAL_FIELD_NAMES = [
 # Full Symbol Info (from cmd 18, detailed contract specifications)
 # These fields extend SYMBOL_BASIC_SCHEMA with trading parameters.
 # ---------------------------------------------------------------------------
-FULL_SYMBOL_SCHEMA = [
-    {"propType": PROP_FIXED_STRING, "propLength": 64},   # 0: trade_symbol
-    {"propType": PROP_FIXED_STRING, "propLength": 128},  # 1: symbol_description
-    {"propType": PROP_U32},                               # 2: digits
-    {"propType": PROP_U32},                               # 3: symbol_id
-    {"propType": PROP_FIXED_STRING, "propLength": 256},  # 4: symbol_path
-    {"propType": PROP_U32},                               # 5: trade_calc_mode
-    {"propType": PROP_FIXED_STRING, "propLength": 64},   # 6: basis
-    {"propType": PROP_U16},                               # 7: sector
+FULL_SYMBOL_SCHEMA = SYMBOL_BASIC_SCHEMA + [
     {"propType": PROP_F64},                               # 8: contract_size
     {"propType": PROP_F64},                               # 9: tick_size
     {"propType": PROP_F64},                               # 10: tick_value
@@ -226,9 +218,7 @@ FULL_SYMBOL_SCHEMA = [
     {"propType": PROP_U32},                               # 27: order_mode
 ]
 
-FULL_SYMBOL_FIELD_NAMES = [
-    "trade_symbol", "symbol_description", "digits", "symbol_id",
-    "symbol_path", "trade_calc_mode", "basis", "sector",
+FULL_SYMBOL_FIELD_NAMES = SYMBOL_BASIC_FIELD_NAMES + [
     "contract_size", "tick_size", "tick_value", "point",
     "volume_min", "volume_max", "volume_step",
     "trade_mode", "trade_stops_level", "trade_freeze_level",
@@ -556,3 +546,35 @@ ACCOUNT_BASE_FIELD_NAMES = [
     "assets", "liabilities", "commission_blocked",
     "name", "server", "currency", "company",
 ]
+
+# ---------------------------------------------------------------------------
+# Schema / field-name consistency assertions (Phase 3.2)
+# Catches mismatches at import time rather than at runtime.
+# ---------------------------------------------------------------------------
+_SCHEMA_PAIRS = [
+    (TICK_SCHEMA, TICK_FIELD_NAMES, "TICK"),
+    (SYMBOL_BASIC_SCHEMA, SYMBOL_BASIC_FIELD_NAMES, "SYMBOL_BASIC"),
+    (POSITION_SCHEMA, POSITION_FIELD_NAMES, "POSITION"),
+    (ORDER_SCHEMA, ORDER_FIELD_NAMES, "ORDER"),
+    (DEAL_SCHEMA, DEAL_FIELD_NAMES, "DEAL"),
+    (FULL_SYMBOL_SCHEMA, FULL_SYMBOL_FIELD_NAMES, "FULL_SYMBOL"),
+    (RATE_BAR_SCHEMA, RATE_BAR_FIELD_NAMES, "RATE_BAR"),
+    (RATE_BAR_SCHEMA_EXT, RATE_BAR_FIELD_NAMES_EXT, "RATE_BAR_EXT"),
+    (SYMBOL_GROUP_SCHEMA, SYMBOL_GROUP_FIELD_NAMES, "SYMBOL_GROUP"),
+    (SPREAD_SCHEMA, SPREAD_FIELD_NAMES, "SPREAD"),
+    (BOOK_HEADER_SCHEMA, BOOK_HEADER_FIELD_NAMES, "BOOK_HEADER"),
+    (BOOK_LEVEL_SCHEMA, BOOK_LEVEL_FIELD_NAMES, "BOOK_LEVEL"),
+    (TRADE_TRANSACTION_SCHEMA, TRADE_TRANSACTION_FIELD_NAMES, "TRADE_TRANSACTION"),
+    (TRADE_UPDATE_BALANCE_SCHEMA, TRADE_UPDATE_BALANCE_FIELD_NAMES, "TRADE_UPDATE_BALANCE"),
+    (SYMBOL_DETAILS_SCHEMA, SYMBOL_DETAILS_FIELD_NAMES, "SYMBOL_DETAILS"),
+    (TRADE_RESULT_PUSH_SCHEMA, TRADE_RESULT_PUSH_FIELD_NAMES, "TRADE_RESULT_PUSH"),
+    (TRADE_RESULT_RESPONSE_SCHEMA, TRADE_RESULT_RESPONSE_FIELD_NAMES, "TRADE_RESULT_RESPONSE"),
+    (CORPORATE_LINK_SCHEMA, CORPORATE_LINK_FIELD_NAMES, "CORPORATE_LINK"),
+    (ACCOUNT_BASE_SCHEMA, ACCOUNT_BASE_FIELD_NAMES, "ACCOUNT_BASE"),
+]
+
+for _schema, _names, _label in _SCHEMA_PAIRS:
+    assert len(_schema) == len(_names), (
+        f"{_label}_SCHEMA has {len(_schema)} fields but "
+        f"{_label}_FIELD_NAMES has {len(_names)} entries"
+    )

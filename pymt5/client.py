@@ -228,6 +228,7 @@ class MT5WebClient:
         # Stored credentials for reconnect
         self._login_kwargs: dict | None = None
         self._subscribed_ids: list[int] = []
+        self._subscribed_book_ids: list[int] = []
         # User disconnect callback
         self._on_disconnect: Callable[[], None] | None = None
         # Wire up transport disconnect handler
@@ -303,6 +304,9 @@ class MT5WebClient:
         if self._on_disconnect:
             self._on_disconnect()
         if self._auto_reconnect and not self._closing and self._login_kwargs:
+            if self._reconnect_task is not None and not self._reconnect_task.done():
+                logger.debug("reconnect already in progress, skipping")
+                return
             self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
     async def _reconnect_loop(self) -> None:
@@ -311,6 +315,11 @@ class MT5WebClient:
             logger.info("reconnect attempt %d/%d", attempt, self._max_reconnect_attempts)
             await asyncio.sleep(self._reconnect_delay * attempt)
             try:
+                # Close old transport to release resources
+                try:
+                    await self.transport.close()
+                except Exception:
+                    pass
                 # Reset transport for fresh connection
                 self.transport = MT5WebSocketTransport(uri=self.uri, timeout=self.timeout)
                 self.transport._on_disconnect = self._handle_disconnect
@@ -322,6 +331,9 @@ class MT5WebClient:
                 # Re-subscribe to ticks if we had subscriptions
                 if self._subscribed_ids:
                     await self.subscribe_ticks(self._subscribed_ids)
+                # Re-subscribe to order book if we had subscriptions
+                if self._subscribed_book_ids:
+                    await self.subscribe_book(self._subscribed_book_ids)
                 logger.info("reconnected successfully on attempt %d", attempt)
                 return
             except Exception as exc:
@@ -526,6 +538,7 @@ class MT5WebClient:
         """
         payload = struct.pack(f"<{len(symbol_ids)}I", *symbol_ids)
         await self.transport.send_command(CMD_SUBSCRIBE_BOOK, payload)
+        self._subscribed_book_ids = list(symbol_ids)
         logger.info("subscribed to order book for %d symbols", len(symbol_ids))
 
     async def subscribe_book_by_name(self, symbol_names: list[str]) -> list[int]:
@@ -636,6 +649,25 @@ class MT5WebClient:
         logger.info("subscribed to %d symbol ids for ticks (added %d new)",
                      len(merged), len(set(symbol_ids) - existing))
 
+    async def unsubscribe_ticks(self, symbol_ids: list[int]) -> None:
+        """Remove specific symbol IDs from tick subscriptions.
+
+        If the resulting subscription set is empty, sends an empty subscription
+        to the server to stop all tick pushes.
+        """
+        existing = set(self._subscribed_ids)
+        to_remove = set(symbol_ids)
+        remaining = sorted(existing - to_remove)
+        if remaining:
+            payload = struct.pack(f"<{len(remaining) + 1}I", len(remaining), *remaining)
+        else:
+            payload = struct.pack("<I", 0)
+        await self.transport.send_command(CMD_SUBSCRIBE_TICKS, payload)
+        removed_count = len(existing) - len(remaining)
+        self._subscribed_ids = remaining
+        logger.info("unsubscribed %d symbol ids from ticks (%d remaining)",
+                     removed_count, len(remaining))
+
     async def subscribe_symbols(self, symbol_names: list[str]) -> list[int]:
         """Subscribe to tick updates by symbol name (requires load_symbols first).
 
@@ -655,22 +687,25 @@ class MT5WebClient:
         await self.subscribe_ticks(ids)
         return ids
 
-    def on_tick(self, callback: Callable[[RecordList], None]) -> None:
+    def on_tick(self, callback: Callable[[RecordList], None]) -> Callable:
         tick_size = get_series_size(TICK_SCHEMA)
         def _handler(result: CommandResult) -> None:
-            count = len(result.body) // tick_size
-            ticks = []
-            for i in range(count):
-                vals = SeriesCodec.parse_at(result.body, TICK_SCHEMA, i * tick_size)
-                d = dict(zip(TICK_FIELD_NAMES, vals))
-                d["tick_time_ms"] = d["tick_time"] * 1000 + d["time_ms_delta"]
-                # Resolve symbol name from cache if available
-                sym_info = self._symbols_by_id.get(d["symbol_id"])
-                if sym_info:
-                    d["symbol"] = sym_info.name
-                ticks.append(d)
-            callback(ticks)
+            try:
+                count = len(result.body) // tick_size
+                ticks = []
+                for i in range(count):
+                    vals = SeriesCodec.parse_at(result.body, TICK_SCHEMA, i * tick_size)
+                    d = dict(zip(TICK_FIELD_NAMES, vals))
+                    d["tick_time_ms"] = d["tick_time"] * 1000 + d["time_ms_delta"]
+                    sym_info = self._symbols_by_id.get(d["symbol_id"])
+                    if sym_info:
+                        d["symbol"] = sym_info.name
+                    ticks.append(d)
+                callback(ticks)
+            except Exception as exc:
+                logger.error("tick parse error: %s", exc)
         self.transport.on(CMD_TICK_PUSH, _handler)
+        return _handler
 
     async def get_rates(
         self, symbol: str, period_minutes: int, from_ts: int, to_ts: int
@@ -800,10 +835,11 @@ class MT5WebClient:
 
     # ---- Push Event Handling ----
 
-    def on_position_update(self, callback: Callable[[RecordList], None]) -> None:
+    def on_position_update(self, callback: Callable[[RecordList], None]) -> Callable:
         """Register callback for position change push notifications.
 
         The server pushes cmd=4 data when positions or orders change.
+        Returns the internal handler for use with transport.off().
         """
         def _handler(result: CommandResult) -> None:
             try:
@@ -813,11 +849,13 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("position update parse error: %s", exc)
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
+        return _handler
 
-    def on_order_update(self, callback: Callable[[RecordList], None]) -> None:
+    def on_order_update(self, callback: Callable[[RecordList], None]) -> Callable:
         """Register callback for order change push notifications.
 
         Parses orders from the same cmd=4 push.
+        Returns the internal handler for use with transport.off().
         """
         def _handler(result: CommandResult) -> None:
             try:
@@ -830,13 +868,15 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("order update parse error: %s", exc)
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
+        return _handler
 
-    def on_trade_update(self, callback: Callable[[dict[str, RecordList]], None]) -> None:
+    def on_trade_update(self, callback: Callable[[dict[str, RecordList]], None]) -> Callable:
         """Register callback for combined position+order push notifications.
 
         Parses both positions and orders from cmd=4 push into a single dict
         with keys 'positions' and 'orders'. More efficient than registering
         separate on_position_update and on_order_update handlers.
+        Returns the internal handler for use with transport.off().
         """
         def _handler(result: CommandResult) -> None:
             try:
@@ -850,20 +890,24 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("trade update parse error: %s", exc)
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
+        return _handler
 
-    def on_symbol_update(self, callback: Callable[[CommandResult], None]) -> None:
+    def on_symbol_update(self, callback: Callable[[CommandResult], None]) -> Callable:
         """Register callback for symbol update push notifications (cmd=13).
 
         The server pushes symbol changes (e.g. spread updates, trading hours).
         Raw CommandResult is passed since the exact schema varies.
+        Returns the callback for use with transport.off().
         """
         self.transport.on(CMD_SYMBOL_UPDATE_PUSH, callback)
+        return callback
 
-    def on_account_update(self, callback: Callable[[Record], None]) -> None:
+    def on_account_update(self, callback: Callable[[Record], None]) -> Callable:
         """Register callback for account update push notifications (cmd=14).
 
         Server pushes account balance/margin/equity changes in real-time.
         Callback receives a dict with the same fields as get_account().
+        Returns the internal handler for use with transport.off().
         """
         def _handler(result: CommandResult) -> None:
             try:
@@ -872,15 +916,18 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("account update parse error: %s", exc)
         self.transport.on(CMD_ACCOUNT_UPDATE_PUSH, _handler)
+        return _handler
 
-    def on_login_status(self, callback: Callable[[CommandResult], None]) -> None:
+    def on_login_status(self, callback: Callable[[CommandResult], None]) -> Callable:
         """Register callback for login status push notifications (cmd=15).
 
         The server may push login status changes (e.g. forced logout, session expiry).
+        Returns the callback for use with transport.off().
         """
         self.transport.on(CMD_LOGIN_STATUS_PUSH, callback)
+        return callback
 
-    def on_symbol_details(self, callback: Callable[[RecordList], None]) -> None:
+    def on_symbol_details(self, callback: Callable[[RecordList], None]) -> Callable:
         """Register callback for extended symbol quote data (cmd=17).
 
         Receives detailed quote data including options greeks (delta, gamma, theta,
@@ -906,8 +953,9 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("symbol details parse error: %s", exc)
         self.transport.on(CMD_SYMBOL_DETAILS_PUSH, _handler)
+        return _handler
 
-    def on_trade_result(self, callback: Callable[[Record], None]) -> None:
+    def on_trade_result(self, callback: Callable[[Record], None]) -> Callable:
         """Register callback for async trade execution results (cmd=19).
 
         Server pushes trade results asynchronously. Callback receives a dict
@@ -929,8 +977,9 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("trade result push parse error: %s", exc)
         self.transport.on(CMD_TRADE_RESULT_PUSH, _handler)
+        return _handler
 
-    def on_trade_transaction(self, callback: Callable[[Record], None]) -> None:
+    def on_trade_transaction(self, callback: Callable[[Record], None]) -> Callable:
         """Register callback for trade update push (cmd=10).
 
         Receives real-time trade state changes:
@@ -977,8 +1026,9 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("trade transaction push parse error: %s", exc)
         self.transport.on(CMD_TRADE_UPDATE_PUSH, _handler)
+        return _handler
 
-    def on_book_update(self, callback: Callable[[RecordList], None]) -> None:
+    def on_book_update(self, callback: Callable[[RecordList], None]) -> Callable:
         """Register callback for order book / DOM push (cmd=23).
 
         Receives list of dicts, each with 'symbol_id', 'bids', 'asks'.
@@ -1019,6 +1069,7 @@ class MT5WebClient:
             except Exception as exc:
                 logger.error("book update parse error: %s", exc)
         self.transport.on(CMD_BOOK_PUSH, _handler)
+        return _handler
 
     # ---- Trading ----
 
@@ -1046,6 +1097,10 @@ class MT5WebClient:
         position_by: int = 0,
         time_expiration: int = 0,
     ) -> TradeResult:
+        if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_PENDING) and volume <= 0:
+            raise ValueError(f"volume must be > 0 for trade_action={trade_action}, got {volume}")
+        if trade_action == TRADE_ACTION_PENDING and price_order <= 0.0:
+            raise ValueError(f"price_order must be > 0 for pending orders, got {price_order}")
         payload = SeriesCodec.serialize([
             (PROP_U32, action_id),
             (PROP_U32, trade_action),
@@ -1119,6 +1174,45 @@ class MT5WebClient:
         """
         return int(round(volume * (10 ** precision)))
 
+    async def _place_order(
+        self,
+        *,
+        trade_action: int,
+        symbol: str,
+        volume: float,
+        trade_type: int,
+        digits: int | None = None,
+        price: float = 0.0,
+        trigger_price: float = 0.0,
+        sl: float = 0.0,
+        tp: float = 0.0,
+        deviation: int = 0,
+        comment: str = "",
+        filling: int = ORDER_FILLING_FOK,
+        time_type: int = ORDER_TIME_GTC,
+        expiration: int = 0,
+        magic: int = 0,
+    ) -> TradeResult:
+        """Internal helper for all order placement methods."""
+        d = self._resolve_digits(symbol, digits)
+        return await self.trade_request(
+            trade_action=trade_action,
+            symbol=symbol,
+            volume=self._volume_to_lots(volume),
+            digits=d,
+            trade_type=trade_type,
+            type_filling=filling,
+            type_time=time_type,
+            price_order=price,
+            price_trigger=trigger_price,
+            price_sl=sl,
+            price_tp=tp,
+            deviation=deviation,
+            comment=comment,
+            time_expiration=expiration,
+            type_reason=magic,
+        )
+
     async def buy_market(
         self,
         symbol: str,
@@ -1133,19 +1227,10 @@ class MT5WebClient:
         magic: int = 0,
     ) -> TradeResult:
         """Place a market buy order."""
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_DEAL,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_BUY,
-            type_filling=filling,
-            price_sl=sl,
-            price_tp=tp,
-            deviation=deviation,
-            comment=comment,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_DEAL, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_BUY, digits=digits, sl=sl, tp=tp,
+            deviation=deviation, comment=comment, filling=filling, magic=magic,
         )
 
     async def sell_market(
@@ -1162,19 +1247,10 @@ class MT5WebClient:
         magic: int = 0,
     ) -> TradeResult:
         """Place a market sell order."""
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_DEAL,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_SELL,
-            type_filling=filling,
-            price_sl=sl,
-            price_tp=tp,
-            deviation=deviation,
-            comment=comment,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_DEAL, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_SELL, digits=digits, sl=sl, tp=tp,
+            deviation=deviation, comment=comment, filling=filling, magic=magic,
         )
 
     async def buy_limit(
@@ -1193,21 +1269,11 @@ class MT5WebClient:
         magic: int = 0,
     ) -> TradeResult:
         """Place a buy limit pending order."""
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_BUY_LIMIT,
-            type_filling=filling,
-            type_time=time_type,
-            price_order=price,
-            price_sl=sl,
-            price_tp=tp,
-            comment=comment,
-            time_expiration=expiration,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_PENDING, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_BUY_LIMIT, digits=digits, price=price,
+            sl=sl, tp=tp, comment=comment, filling=filling,
+            time_type=time_type, expiration=expiration, magic=magic,
         )
 
     async def sell_limit(
@@ -1226,21 +1292,11 @@ class MT5WebClient:
         magic: int = 0,
     ) -> TradeResult:
         """Place a sell limit pending order."""
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_SELL_LIMIT,
-            type_filling=filling,
-            type_time=time_type,
-            price_order=price,
-            price_sl=sl,
-            price_tp=tp,
-            comment=comment,
-            time_expiration=expiration,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_PENDING, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_SELL_LIMIT, digits=digits, price=price,
+            sl=sl, tp=tp, comment=comment, filling=filling,
+            time_type=time_type, expiration=expiration, magic=magic,
         )
 
     async def buy_stop(
@@ -1259,21 +1315,11 @@ class MT5WebClient:
         magic: int = 0,
     ) -> TradeResult:
         """Place a buy stop pending order."""
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_BUY_STOP,
-            type_filling=filling,
-            type_time=time_type,
-            price_order=price,
-            price_sl=sl,
-            price_tp=tp,
-            comment=comment,
-            time_expiration=expiration,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_PENDING, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_BUY_STOP, digits=digits, price=price,
+            sl=sl, tp=tp, comment=comment, filling=filling,
+            time_type=time_type, expiration=expiration, magic=magic,
         )
 
     async def sell_stop(
@@ -1292,21 +1338,11 @@ class MT5WebClient:
         magic: int = 0,
     ) -> TradeResult:
         """Place a sell stop pending order."""
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_SELL_STOP,
-            type_filling=filling,
-            type_time=time_type,
-            price_order=price,
-            price_sl=sl,
-            price_tp=tp,
-            comment=comment,
-            time_expiration=expiration,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_PENDING, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_SELL_STOP, digits=digits, price=price,
+            sl=sl, tp=tp, comment=comment, filling=filling,
+            time_type=time_type, expiration=expiration, magic=magic,
         )
 
     async def buy_stop_limit(
@@ -1331,22 +1367,12 @@ class MT5WebClient:
             price: Stop trigger price (price_trigger).
             stop_limit_price: Limit price placed after stop triggers (price_order).
         """
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_BUY_STOP_LIMIT,
-            type_filling=filling,
-            type_time=time_type,
-            price_order=stop_limit_price,
-            price_trigger=price,
-            price_sl=sl,
-            price_tp=tp,
-            comment=comment,
-            time_expiration=expiration,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_PENDING, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_BUY_STOP_LIMIT, digits=digits,
+            price=stop_limit_price, trigger_price=price,
+            sl=sl, tp=tp, comment=comment, filling=filling,
+            time_type=time_type, expiration=expiration, magic=magic,
         )
 
     async def sell_stop_limit(
@@ -1371,22 +1397,12 @@ class MT5WebClient:
             price: Stop trigger price (price_trigger).
             stop_limit_price: Limit price placed after stop triggers (price_order).
         """
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ORDER_TYPE_SELL_STOP_LIMIT,
-            type_filling=filling,
-            type_time=time_type,
-            price_order=stop_limit_price,
-            price_trigger=price,
-            price_sl=sl,
-            price_tp=tp,
-            comment=comment,
-            time_expiration=expiration,
-            type_reason=magic,
+        return await self._place_order(
+            trade_action=TRADE_ACTION_PENDING, symbol=symbol, volume=volume,
+            trade_type=ORDER_TYPE_SELL_STOP_LIMIT, digits=digits,
+            price=stop_limit_price, trigger_price=price,
+            sl=sl, tp=tp, comment=comment, filling=filling,
+            time_type=time_type, expiration=expiration, magic=magic,
         )
 
     async def close_position(
@@ -1435,6 +1451,11 @@ class MT5WebClient:
                     if p.get("trade_action") == POSITION_TYPE_SELL:
                         return ORDER_TYPE_BUY
                     return ORDER_TYPE_SELL
+            logger.warning(
+                "position %d not found in open positions; "
+                "defaulting to SELL (may open an unwanted short position)",
+                position_id,
+            )
         except Exception as exc:
             logger.debug("failed to detect position direction: %s", exc)
         return ORDER_TYPE_SELL

@@ -5,6 +5,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+import inspect as _inspect
+
 import websockets
 from websockets.asyncio.client import ClientConnection
 
@@ -13,6 +15,9 @@ from pymt5.crypto import AESCipher, initial_cipher
 from pymt5.protocol import ResponseFrame, build_command, pack_outer, parse_response_frame, unpack_outer
 
 logger = logging.getLogger("pymt5.transport")
+
+# Cache inspect.signature result at module level (Phase 3.5)
+_WS_CONNECT_HAS_PROXY = "proxy" in _inspect.signature(websockets.connect).parameters
 
 
 @dataclass(slots=True)
@@ -37,6 +42,9 @@ class MT5WebSocketTransport:
         self._on_disconnect: Callable[[], None] | None = None
 
     async def connect(self) -> None:
+        # Guard against double-connect (Phase 2.4)
+        if self.ws is not None:
+            await self.close()
         self.is_ready = False
         self.cipher = initial_cipher()
         logger.info("connecting to %s", self.uri)
@@ -50,8 +58,7 @@ class MT5WebSocketTransport:
         }
         # websockets >=15 auto-detects system proxy (proxy=True default)
         # which breaks the MT5 binary protocol; bypass it explicitly.
-        import inspect as _inspect
-        if "proxy" in _inspect.signature(websockets.connect).parameters:
+        if _WS_CONNECT_HAS_PROXY:
             connect_kwargs["proxy"] = None
         self.ws = await asyncio.wait_for(
             websockets.connect(self.uri, **connect_kwargs),
@@ -109,7 +116,17 @@ class MT5WebSocketTransport:
             encrypted = self.cipher.encrypt(inner)
             logger.debug("send cmd=%d payload=%d bytes", command, len(payload))
             await self.ws.send(pack_outer(encrypted))
-        return await asyncio.wait_for(future, timeout=self.timeout)
+        try:
+            return await asyncio.wait_for(future, timeout=self.timeout)
+        except asyncio.TimeoutError:
+            # Remove leaked future from _pending on timeout (Phase 2.1)
+            queue = self._pending.get(command)
+            if queue:
+                try:
+                    queue.remove(future)
+                except ValueError:
+                    pass
+            raise
 
     async def _recv_loop(self) -> None:
         try:
@@ -118,15 +135,15 @@ class MT5WebSocketTransport:
                 if isinstance(message, str):
                     continue
                 try:
-                    _, _, encrypted = unpack_outer(bytes(message))
+                    raw = message if isinstance(message, bytes) else bytes(message)
+                    _, _, encrypted = unpack_outer(raw)
                     decrypted = self.cipher.decrypt(encrypted)
                     frame = parse_response_frame(decrypted)
                     logger.debug("recv cmd=%d code=%d body=%d bytes", frame.command, frame.code, len(frame.body))
                     await self._dispatch(frame)
                 except Exception as exc:
                     logger.error("recv_loop parse error: %s", exc)
-                    self._fail_all(exc)
-                    raise
+                    continue
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -145,9 +162,9 @@ class MT5WebSocketTransport:
                 if not future.done():
                     future.set_result(result)
                     break
-        for callback in list(self._listeners.get(frame.command, set())):
+        for callback in tuple(self._listeners.get(frame.command, ())):
             maybe = callback(result)
-            if asyncio.iscoroutine(maybe):
+            if _inspect.isawaitable(maybe):
                 await maybe
 
     def _fail_all(self, exc: Exception) -> None:

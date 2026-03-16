@@ -3,7 +3,11 @@ pymt5 - Python client for MT5 Web Terminal
 Reverse-engineered WebSocket binary protocol implementation.
 """
 
-__version__ = "0.5.0"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("pymt5")
+except Exception:
+    __version__ = "0.6.0"
 
 from pymt5.client import AccountInfo, MT5WebClient, SymbolInfo, TradeResult
 from pymt5.constants import (

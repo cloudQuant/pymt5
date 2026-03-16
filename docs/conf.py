@@ -8,7 +8,12 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "pymt5"
 copyright = "2026, cloudQuant"
 author = "cloudQuant"
-release = "0.5.0"
+
+try:
+    from importlib.metadata import version as _pkg_version
+    release = _pkg_version("pymt5")
+except Exception:
+    release = "0.6.0"
 
 extensions = [
     "sphinx.ext.autodoc",

@@ -257,3 +257,57 @@ def test_deal_schema_size():
     # Pd: I64 + FS64 + I64 + U32*2 + FS64 + U32*2 + F64*4 + U64 + F64*5 + I64*2 + FS64 + F64 + U32*3 + I32*2 + F64
     expected = (8 + 64 + 8 + 4*2 + 64 + 4*2 + 8*4 + 8 + 8*5 + 8*2 + 64 + 8 + 4*3 + 4*2 + 8)
     assert get_series_size(DEAL_SCHEMA) == expected
+
+
+# ---- Error path tests (Phase 4.3) ----
+
+def test_unpack_outer_short_frame():
+    import pytest
+    with pytest.raises(ValueError, match="frame too short"):
+        from pymt5.protocol import unpack_outer
+        unpack_outer(b"\x00\x01\x02")  # less than 8 bytes
+
+
+def test_unpack_outer_length_mismatch():
+    import pytest
+    from pymt5.protocol import unpack_outer
+    # header says body_len=100 but actual body is 4 bytes
+    frame = struct.pack("<II", 100, 1) + b"\x00" * 4
+    with pytest.raises(ValueError, match="frame length mismatch"):
+        unpack_outer(frame)
+
+
+def test_unpack_outer_empty_body():
+    from pymt5.protocol import unpack_outer
+    # header says body_len=0, body is empty
+    frame = struct.pack("<II", 0, 1)
+    body_len, version, body = unpack_outer(frame)
+    assert body_len == 0
+    assert body == b""
+
+
+def test_parse_response_frame_short_data():
+    import pytest
+    with pytest.raises(ValueError, match="response frame too short"):
+        parse_response_frame(b"\x00\x01\x02\x03")  # only 4 bytes, need 5
+
+
+def test_parse_response_frame_exactly_5_bytes():
+    frame = parse_response_frame(b"\xAA\xBB\x00\x00\x05")
+    assert frame.command == 0
+    assert frame.code == 5
+    assert frame.body == b""
+
+
+def test_series_codec_truncated_buffer():
+    import pytest
+    # TICK_SCHEMA needs 50 bytes, give it only 10
+    with pytest.raises(ValueError, match="buffer too short"):
+        SeriesCodec.parse(b"\x00" * 10, TICK_SCHEMA)
+
+
+def test_series_codec_truncated_buffer_with_offset():
+    import pytest
+    # Buffer is 50 bytes but offset=45 leaves only 5 bytes
+    with pytest.raises(ValueError, match="buffer too short"):
+        SeriesCodec.parse(b"\x00" * 50, TICK_SCHEMA, offset=45)

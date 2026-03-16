@@ -165,6 +165,13 @@ class SeriesCodec:
         schema: Sequence[Sequence[object] | Mapping[str, object]],
         offset: int = 0,
     ) -> list[Any]:
+        required = get_series_size(schema)
+        available = len(buffer) - offset
+        if available < required:
+            raise ValueError(
+                f"buffer too short: need {required} bytes from offset {offset}, "
+                f"but only {available} bytes available"
+            )
         values: list[Any] = []
         cursor = offset
         for field in schema:
