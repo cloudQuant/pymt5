@@ -5,9 +5,8 @@ import asyncio
 
 import pytest
 
-from pymt5.constants import CMD_BOOTSTRAP, CMD_TICK_PUSH, VALID_COMMANDS
+from pymt5.constants import CMD_BOOTSTRAP, CMD_TICK_PUSH
 from pymt5.transport import CommandResult, MT5WebSocketTransport
-
 
 # ---- Init ----
 
@@ -29,17 +28,22 @@ def test_transport_init_custom_timeout():
 
 # ---- on / off listener management ----
 
+def _noop(r):
+    return None
+
+
 def test_on_registers_listener():
     t = MT5WebSocketTransport(uri="wss://x")
-    cb = lambda r: None
-    t.on(CMD_TICK_PUSH, cb)
-    assert cb in t._listeners[CMD_TICK_PUSH]
+    t.on(CMD_TICK_PUSH, _noop)
+    assert _noop in t._listeners[CMD_TICK_PUSH]
 
 
 def test_off_removes_specific_listener():
     t = MT5WebSocketTransport(uri="wss://x")
-    cb1 = lambda r: None
-    cb2 = lambda r: None
+
+    def cb1(r): return None
+    def cb2(r): return None
+
     t.on(CMD_TICK_PUSH, cb1)
     t.on(CMD_TICK_PUSH, cb2)
     assert len(t._listeners[CMD_TICK_PUSH]) == 2
@@ -59,8 +63,7 @@ def test_off_clears_all_listeners():
 
 def test_off_nonexistent_callback_no_error():
     t = MT5WebSocketTransport(uri="wss://x")
-    cb = lambda r: None
-    t.off(CMD_TICK_PUSH, cb)  # should not raise
+    t.off(CMD_TICK_PUSH, _noop)  # should not raise
 
 
 # ---- _dispatch ----

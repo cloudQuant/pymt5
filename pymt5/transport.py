@@ -1,11 +1,11 @@
 import asyncio
 import contextlib
+import inspect as _inspect
 import logging
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
-
-import inspect as _inspect
+from typing import Any
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -118,7 +118,7 @@ class MT5WebSocketTransport:
             await self.ws.send(pack_outer(encrypted))
         try:
             return await asyncio.wait_for(future, timeout=self.timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Remove leaked future from _pending on timeout (Phase 2.1)
             queue = self._pending.get(command)
             if queue:

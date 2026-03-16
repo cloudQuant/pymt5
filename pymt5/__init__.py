@@ -11,16 +11,16 @@ except Exception:
 
 from pymt5.client import AccountInfo, MT5WebClient, SymbolInfo, TradeResult
 from pymt5.constants import (
+    CMD_ACCOUNT_UPDATE_PUSH,
+    CMD_BOOK_PUSH,
     # Command IDs
     CMD_GET_ACCOUNT,
+    CMD_GET_CORPORATE_LINKS,
     CMD_GET_SYMBOL_GROUPS,
-    CMD_TRADE_UPDATE_PUSH,
-    CMD_ACCOUNT_UPDATE_PUSH,
+    CMD_SUBSCRIBE_BOOK,
     CMD_SYMBOL_DETAILS_PUSH,
     CMD_TRADE_RESULT_PUSH,
-    CMD_SUBSCRIBE_BOOK,
-    CMD_BOOK_PUSH,
-    CMD_GET_CORPORATE_LINKS,
+    CMD_TRADE_UPDATE_PUSH,
     # Deal entry
     DEAL_ENTRY_IN,
     DEAL_ENTRY_INOUT,
@@ -73,9 +73,9 @@ from pymt5.constants import (
     PERIOD_H1,
     PERIOD_H4,
     PERIOD_M1,
+    PERIOD_M5,
     PERIOD_M15,
     PERIOD_M30,
-    PERIOD_M5,
     PERIOD_MN1,
     PERIOD_W1,
     # Position types

@@ -3,8 +3,9 @@ import logging
 import os
 import struct
 import zlib
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from pymt5.constants import (
     CMD_ACCOUNT_UPDATE_PUSH,
@@ -49,7 +50,6 @@ from pymt5.constants import (
     ORDER_TYPE_SELL_STOP,
     ORDER_TYPE_SELL_STOP_LIMIT,
     PERIOD_MAP,
-    POSITION_TYPE_BUY,
     POSITION_TYPE_SELL,
     PROP_BYTES,
     PROP_F64,
@@ -72,8 +72,6 @@ from pymt5.constants import (
 from pymt5.helpers import build_client_id, bytes_to_hex
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
-    ACCOUNT_BASE_FIELD_NAMES,
-    ACCOUNT_BASE_SCHEMA,
     BOOK_HEADER_FIELD_NAMES,
     BOOK_HEADER_SCHEMA,
     BOOK_LEVEL_FIELD_NAMES,
@@ -98,11 +96,9 @@ from pymt5.schemas import (
     SYMBOL_BASIC_SCHEMA,
     SYMBOL_DETAILS_FIELD_NAMES,
     SYMBOL_DETAILS_SCHEMA,
-    SYMBOL_GROUP_FIELD_NAMES,
     SYMBOL_GROUP_SCHEMA,
     TICK_FIELD_NAMES,
     TICK_SCHEMA,
-    TRADE_REQUEST_SCHEMA,
     TRADE_RESULT_PUSH_FIELD_NAMES,
     TRADE_RESULT_PUSH_SCHEMA,
     TRADE_RESULT_RESPONSE_FIELD_NAMES,

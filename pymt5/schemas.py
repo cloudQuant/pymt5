@@ -12,7 +12,6 @@ from pymt5.constants import (
     PROP_FIXED_STRING,
     PROP_I32,
     PROP_I64,
-    PROP_U8,
     PROP_U16,
     PROP_U32,
     PROP_U64,

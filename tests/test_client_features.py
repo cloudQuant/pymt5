@@ -9,11 +9,11 @@ import struct
 import pytest
 
 from pymt5.client import (
+    TRADE_RESPONSE_SCHEMA,
     AccountInfo,
     MT5WebClient,
     SymbolInfo,
     TradeResult,
-    TRADE_RESPONSE_SCHEMA,
     _parse_counted_records,
     _parse_rate_bars,
 )
@@ -24,30 +24,17 @@ from pymt5.constants import (
     CMD_GET_CORPORATE_LINKS,
     CMD_GET_POSITIONS_ORDERS,
     CMD_GET_SYMBOL_GROUPS,
-    CMD_SYMBOL_DETAILS_PUSH,
     CMD_SUBSCRIBE_BOOK,
+    CMD_SYMBOL_DETAILS_PUSH,
     CMD_TRADE_RESULT_PUSH,
     CMD_TRADE_UPDATE_PUSH,
     DEAL_ENTRY_IN,
     DEAL_ENTRY_OUT,
     DEAL_ENTRY_OUT_BY,
     DEAL_TYPE_BALANCE,
-    DEAL_TYPE_BONUS,
     DEAL_TYPE_BUY,
-    DEAL_TYPE_BUY_CANCELED,
-    DEAL_TYPE_CHARGE,
-    DEAL_TYPE_COMMISSION,
-    DEAL_TYPE_COMMISSION_AGENT_DAILY,
-    DEAL_TYPE_COMMISSION_AGENT_MONTHLY,
-    DEAL_TYPE_COMMISSION_DAILY,
-    DEAL_TYPE_COMMISSION_MONTHLY,
-    DEAL_TYPE_CORRECTION,
-    DEAL_TYPE_CREDIT,
-    DEAL_TYPE_INTEREST,
     DEAL_TYPE_SELL,
-    DEAL_TYPE_SELL_CANCELED,
     ORDER_FILLING_FOK,
-    ORDER_STATE_EXPIRED,
     ORDER_STATE_FILLED,
     ORDER_STATE_PLACED,
     ORDER_STATE_STARTED,
@@ -91,7 +78,6 @@ from pymt5.schemas import (
     FULL_SYMBOL_FIELD_NAMES,
     FULL_SYMBOL_SCHEMA,
     RATE_BAR_SCHEMA_EXT,
-    RATE_BAR_FIELD_NAMES_EXT,
     SPREAD_FIELD_NAMES,
     SPREAD_SCHEMA,
     SYMBOL_DETAILS_FIELD_NAMES,
@@ -107,7 +93,6 @@ from pymt5.schemas import (
     TRADE_UPDATE_BALANCE_FIELD_NAMES,
     TRADE_UPDATE_BALANCE_SCHEMA,
 )
-
 
 # ---- TradeResult ----
 
@@ -690,7 +675,9 @@ def test_on_book_update_handler_registration():
 def test_transport_off_removes_listener():
     from pymt5.constants import CMD_TICK_PUSH
     client = MT5WebClient()
-    handler = lambda result: None
+
+    def handler(result): return None
+
     client.transport.on(CMD_TICK_PUSH, handler)
     assert handler in client.transport._listeners[CMD_TICK_PUSH]
     client.transport.off(CMD_TICK_PUSH, handler)

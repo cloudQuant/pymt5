@@ -15,7 +15,6 @@ from pymt5.helpers import (
     truncate_ascii,
 )
 
-
 # ---- hex_to_bytes / bytes_to_hex ----
 
 def test_hex_to_bytes():

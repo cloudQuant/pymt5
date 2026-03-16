@@ -6,17 +6,12 @@ from pymt5.crypto import initial_cipher, initial_key_bytes
 from pymt5.helpers import decode_utf16le, encode_utf16le
 from pymt5.protocol import SeriesCodec, build_command, get_series_size, pack_outer, parse_response_frame
 from pymt5.schemas import (
-    DEAL_FIELD_NAMES,
     DEAL_SCHEMA,
+    ORDER_SCHEMA,
+    POSITION_SCHEMA,
+    RATE_BAR_SCHEMA,
     SYMBOL_BASIC_FIELD_NAMES,
     SYMBOL_BASIC_SCHEMA,
-    POSITION_FIELD_NAMES,
-    POSITION_SCHEMA,
-    ORDER_FIELD_NAMES,
-    ORDER_SCHEMA,
-    RATE_BAR_FIELD_NAMES,
-    RATE_BAR_SCHEMA,
-    TICK_FIELD_NAMES,
     TICK_SCHEMA,
 )
 
@@ -270,6 +265,7 @@ def test_unpack_outer_short_frame():
 
 def test_unpack_outer_length_mismatch():
     import pytest
+
     from pymt5.protocol import unpack_outer
     # header says body_len=100 but actual body is 4 bytes
     frame = struct.pack("<II", 100, 1) + b"\x00" * 4

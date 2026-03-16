@@ -4,25 +4,20 @@ unsubscribe_ticks, and on_* handler return values."""
 
 import asyncio
 import struct
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
-from pymt5.client import MT5WebClient, SymbolInfo, _parse_account_response
+from pymt5.client import MT5WebClient, _parse_account_response
 from pymt5.constants import (
-    CMD_GET_POSITIONS_ORDERS,
     CMD_LOGIN,
     CMD_SUBSCRIBE_TICKS,
     CMD_TICK_PUSH,
-    ORDER_TYPE_SELL,
     TRADE_ACTION_DEAL,
     TRADE_ACTION_PENDING,
-    TRADE_RETCODE_DONE,
 )
-from pymt5.protocol import SeriesCodec, get_series_size
-from pymt5.schemas import POSITION_FIELD_NAMES, POSITION_SCHEMA, TICK_FIELD_NAMES, TICK_SCHEMA
+from pymt5.protocol import SeriesCodec
 from pymt5.transport import CommandResult
-
 
 # ---- Login flow ----
 
@@ -229,8 +224,7 @@ def test_reconnect_guard_skips_if_in_progress():
 
     # Create a fake task that is not done
     loop = asyncio.new_event_loop()
-    fake_task = loop.create_future()
-    # Wrap in a Task
+
     async def dummy(): await asyncio.sleep(999)
     client._reconnect_task = loop.create_task(dummy())
 

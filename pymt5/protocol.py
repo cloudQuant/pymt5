@@ -1,6 +1,7 @@
 import struct
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from pymt5.constants import (
     HEADER_BYTE_LENGTH,
@@ -9,17 +10,24 @@ from pymt5.constants import (
     PROP_F32,
     PROP_F64,
     PROP_FIXED_STRING,
+    PROP_I8,
     PROP_I16,
     PROP_I32,
     PROP_I64,
-    PROP_I8,
     PROP_STRING,
+    PROP_U8,
     PROP_U16,
     PROP_U32,
     PROP_U64,
-    PROP_U8,
 )
-from pymt5.helpers import decode_utf16le, encode_utf16le, pad_ascii, pad_bytes, random_command_prefix, strip_fixed_string
+from pymt5.helpers import (
+    decode_utf16le,
+    encode_utf16le,
+    pad_ascii,
+    pad_bytes,
+    random_command_prefix,
+    strip_fixed_string,
+)
 
 
 @dataclass(slots=True)

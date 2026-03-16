@@ -1,6 +1,5 @@
 import hashlib
 import os
-from typing import Optional
 
 
 def hex_to_bytes(value: str) -> bytes:
@@ -69,7 +68,7 @@ def build_client_id(
     device_pixel_ratio: str = "1",
     language: str = "en-US",
     screen: str = "0x0",
-    uniq: Optional[str] = None,
+    uniq: str | None = None,
 ) -> bytes:
     uniq_value = uniq or str(int.from_bytes(os.urandom(3), "big"))
     source = ";".join([platform, device_pixel_ratio, language, screen, uniq_value]).encode("utf-8")
