@@ -15,6 +15,7 @@ from pymt5.constants import (
     PROP_I32,
     PROP_I64,
     PROP_STRING,
+    PROP_TIME,
     PROP_U8,
     PROP_U16,
     PROP_U32,
@@ -35,6 +36,20 @@ class ResponseFrame:
     command: int
     code: int
     body: bytes
+
+
+FILETIME_EPOCH_OFFSET_MS = 11_644_473_600_000
+FILETIME_TICKS_PER_MS = 10_000
+
+
+def _unix_ms_to_filetime(unix_ms: int | float) -> bytes:
+    filetime = int(int(unix_ms) + FILETIME_EPOCH_OFFSET_MS) * FILETIME_TICKS_PER_MS
+    return filetime.to_bytes(8, "little", signed=False)
+
+
+def _filetime_to_unix_ms(buffer: bytes) -> int:
+    filetime = int.from_bytes(buffer, "little", signed=False)
+    return filetime // FILETIME_TICKS_PER_MS - FILETIME_EPOCH_OFFSET_MS
 
 
 def pack_outer(body: bytes) -> bytes:
@@ -110,7 +125,7 @@ def get_series_size(schema: Iterable[Sequence[object] | Mapping[str, object]]) -
             size += 2
         elif prop_type in (PROP_I32, PROP_U32, PROP_F32):
             size += 4
-        elif prop_type in (PROP_F64, PROP_I64, PROP_U64):
+        elif prop_type in (PROP_F64, PROP_TIME, PROP_I64, PROP_U64):
             size += 8
         elif prop_type in (PROP_FIXED_STRING, PROP_BYTES, PROP_STRING):
             if prop_length is None:
@@ -145,6 +160,8 @@ class SeriesCodec:
                 chunks.append(struct.pack("<f", float(value)))
             elif prop_type == PROP_F64:
                 chunks.append(struct.pack("<d", float(value)))
+            elif prop_type == PROP_TIME:
+                chunks.append(_unix_ms_to_filetime(float(value or 0)))
             elif prop_type == PROP_I64:
                 chunks.append(int(value).to_bytes(8, "little", signed=True))
             elif prop_type == PROP_U64:
@@ -208,6 +225,9 @@ class SeriesCodec:
                 cursor += 4
             elif prop_type == PROP_F64:
                 values.append(struct.unpack_from("<d", buffer, cursor)[0])
+                cursor += 8
+            elif prop_type == PROP_TIME:
+                values.append(_filetime_to_unix_ms(buffer[cursor:cursor + 8]))
                 cursor += 8
             elif prop_type == PROP_I64:
                 values.append(int.from_bytes(buffer[cursor:cursor + 8], "little", signed=True))

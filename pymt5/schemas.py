@@ -10,8 +10,10 @@ from pymt5.constants import (
     PROP_BYTES,
     PROP_F64,
     PROP_FIXED_STRING,
+    PROP_I8,
     PROP_I32,
     PROP_I64,
+    PROP_U8,
     PROP_U16,
     PROP_U32,
     PROP_U64,
@@ -192,39 +194,119 @@ DEAL_FIELD_NAMES = [
 
 # ---------------------------------------------------------------------------
 # Full Symbol Info (from cmd 18, detailed contract specifications)
-# These fields extend SYMBOL_BASIC_SCHEMA with trading parameters.
+# Schema $h / Dh in the current Web Terminal bundle.
+#
+# The last three fields are nested binary sections:
+# - trade config: schema ll (same layout as account trade settings)
+# - schedule: 7 * 16 quote sessions + 7 * 16 trade sessions, each session u16/u16
+# - subscription: {delay:u32, status:u8, level:u8, reserved:u16}
 # ---------------------------------------------------------------------------
-FULL_SYMBOL_SCHEMA = SYMBOL_BASIC_SCHEMA + [
-    {"propType": PROP_F64},                               # 8: contract_size
-    {"propType": PROP_F64},                               # 9: tick_size
-    {"propType": PROP_F64},                               # 10: tick_value
-    {"propType": PROP_F64},                               # 11: point
-    {"propType": PROP_F64},                               # 12: volume_min
-    {"propType": PROP_F64},                               # 13: volume_max
-    {"propType": PROP_F64},                               # 14: volume_step
-    {"propType": PROP_U32},                               # 15: trade_mode
-    {"propType": PROP_U32},                               # 16: trade_stops_level
-    {"propType": PROP_U32},                               # 17: trade_freeze_level
-    {"propType": PROP_U32},                               # 18: spread
-    {"propType": PROP_U32},                               # 19: spread_float
-    {"propType": PROP_F64},                               # 20: margin_initial
-    {"propType": PROP_F64},                               # 21: margin_maintenance
-    {"propType": PROP_FIXED_STRING, "propLength": 64},   # 22: currency_base
-    {"propType": PROP_FIXED_STRING, "propLength": 64},   # 23: currency_profit
-    {"propType": PROP_FIXED_STRING, "propLength": 64},   # 24: currency_margin
-    {"propType": PROP_U32},                               # 25: filling_mode
-    {"propType": PROP_U32},                               # 26: expiration_mode
-    {"propType": PROP_U32},                               # 27: order_mode
+FULL_SYMBOL_TRADE_CONFIG_LENGTH = 628
+FULL_SYMBOL_SCHEDULE_LENGTH = 896
+FULL_SYMBOL_SUBSCRIPTION_LENGTH = 8
+
+FULL_SYMBOL_SCHEMA = [
+    {"propType": PROP_FIXED_STRING, "propLength": 64},    # 0: trade_symbol
+    {"propType": PROP_FIXED_STRING, "propLength": 32},    # 1: isin
+    {"propType": PROP_FIXED_STRING, "propLength": 128},   # 2: symbol_description
+    {"propType": PROP_FIXED_STRING, "propLength": 128},   # 3: international
+    {"propType": PROP_FIXED_STRING, "propLength": 64},    # 4: basis
+    {"propType": PROP_FIXED_STRING, "propLength": 64},    # 5: symbol_source
+    {"propType": PROP_FIXED_STRING, "propLength": 512},   # 6: symbol_page
+    {"propType": PROP_FIXED_STRING, "propLength": 128},   # 7: category
+    {"propType": PROP_FIXED_STRING, "propLength": 128},   # 8: trade_exchange
+    {"propType": PROP_FIXED_STRING, "propLength": 16},    # 9: cfi
+    {"propType": PROP_U16},                                # 10: sector
+    {"propType": PROP_U16},                                # 11: industry
+    {"propType": PROP_FIXED_STRING, "propLength": 8},     # 12: country
+    {"propType": PROP_FIXED_STRING, "propLength": 32},    # 13: currency_base
+    {"propType": PROP_FIXED_STRING, "propLength": 32},    # 14: currency_profit
+    {"propType": PROP_FIXED_STRING, "propLength": 32},    # 15: currency_margin
+    {"propType": PROP_U32},                                # 16: currency_base_digits
+    {"propType": PROP_U32},                                # 17: currency_profit_digits
+    {"propType": PROP_U32},                                # 18: currency_margin_digits
+    {"propType": PROP_U32},                                # 19: symbol_color
+    {"propType": PROP_U32},                                # 20: color_background
+    {"propType": PROP_U32},                                # 21: digits
+    {"propType": PROP_F64},                                # 22: point
+    {"propType": PROP_F64},                                # 23: symbol_multiply
+    {"propType": PROP_U32},                                # 24: symbol_id
+    {"propType": PROP_U32},                                # 25: ticks_flags
+    {"propType": PROP_U32},                                # 26: ticks_bookdepth
+    {"propType": PROP_U32},                                # 27: ticks_chart_mode
+    {"propType": PROP_U32},                                # 28: trade_flags
+    {"propType": PROP_I32},                                # 29: spread
+    {"propType": PROP_I32},                                # 30: spread_balance
+    {"propType": PROP_F64},                                # 31: tick_value
+    {"propType": PROP_F64},                                # 32: tick_size
+    {"propType": PROP_F64},                                # 33: contract_size
+    {"propType": PROP_U32},                                # 34: trade_gtc_mode
+    {"propType": PROP_U32},                                # 35: trade_calc_mode
+    {"propType": PROP_F64},                                # 36: trade_price_settle
+    {"propType": PROP_F64},                                # 37: trade_price_limit_min
+    {"propType": PROP_F64},                                # 38: trade_price_limit_max
+    {"propType": PROP_F64},                                # 39: trade_price_strike
+    {"propType": PROP_U32},                                # 40: trade_option_mode
+    {"propType": PROP_F64},                                # 41: face_value
+    {"propType": PROP_F64},                                # 42: accrued_interest
+    {"propType": PROP_U32},                                # 43: time_flags
+    {"propType": PROP_I32},                                # 44: time_start
+    {"propType": PROP_I32},                                # 45: time_expiration
+    {"propType": PROP_BYTES, "propLength": FULL_SYMBOL_TRADE_CONFIG_LENGTH},   # 46: trade
+    {"propType": PROP_BYTES, "propLength": FULL_SYMBOL_SCHEDULE_LENGTH},       # 47: schedule
+    {"propType": PROP_BYTES, "propLength": FULL_SYMBOL_SUBSCRIPTION_LENGTH},   # 48: subscription
 ]
 
-FULL_SYMBOL_FIELD_NAMES = SYMBOL_BASIC_FIELD_NAMES + [
-    "contract_size", "tick_size", "tick_value", "point",
-    "volume_min", "volume_max", "volume_step",
-    "trade_mode", "trade_stops_level", "trade_freeze_level",
-    "spread", "spread_float",
-    "margin_initial", "margin_maintenance",
-    "currency_base", "currency_profit", "currency_margin",
-    "filling_mode", "expiration_mode", "order_mode",
+FULL_SYMBOL_FIELD_NAMES = [
+    "trade_symbol",
+    "isin",
+    "symbol_description",
+    "international",
+    "basis",
+    "symbol_source",
+    "symbol_page",
+    "category",
+    "trade_exchange",
+    "cfi",
+    "sector",
+    "industry",
+    "country",
+    "currency_base",
+    "currency_profit",
+    "currency_margin",
+    "currency_base_digits",
+    "currency_profit_digits",
+    "currency_margin_digits",
+    "symbol_color",
+    "color_background",
+    "digits",
+    "point",
+    "symbol_multiply",
+    "symbol_id",
+    "ticks_flags",
+    "ticks_bookdepth",
+    "ticks_chart_mode",
+    "trade_flags",
+    "spread",
+    "spread_balance",
+    "tick_value",
+    "tick_size",
+    "contract_size",
+    "trade_gtc_mode",
+    "trade_calc_mode",
+    "trade_price_settle",
+    "trade_price_limit_min",
+    "trade_price_limit_max",
+    "trade_price_strike",
+    "trade_option_mode",
+    "face_value",
+    "accrued_interest",
+    "time_flags",
+    "time_start",
+    "time_expiration",
+    "trade",
+    "schedule",
+    "subscription",
 ]
 
 # ---------------------------------------------------------------------------
@@ -547,6 +629,234 @@ ACCOUNT_BASE_FIELD_NAMES = [
 ]
 
 # ---------------------------------------------------------------------------
+# Account Config Header (cmd 3 / cmd 14 initial account block)
+# Schema Tl in the current Web Terminal bundle.
+# ---------------------------------------------------------------------------
+ACCOUNT_WEB_MAIN_SCHEMA = [
+    {"propType": PROP_U8},                                 # 0: account_type
+    {"propType": PROP_I32},                                # 1: rights
+    {"propType": PROP_I32},                                # 2: permissions_flags
+    {"propType": PROP_F64},                                # 3: balance
+    {"propType": PROP_F64},                                # 4: credit
+    {"propType": PROP_FIXED_STRING, "propLength": 64},     # 5: account_currency
+    {"propType": PROP_U32},                                # 6: currency_digits
+    {"propType": PROP_U32},                                # 7: margin_leverage
+    {"propType": PROP_FIXED_STRING, "propLength": 256},    # 8: account_name
+    {"propType": PROP_U16},                                # 9: server_build
+    {"propType": PROP_FIXED_STRING, "propLength": 128},    # 10: server_name
+    {"propType": PROP_FIXED_STRING, "propLength": 256},    # 11: company
+    {"propType": PROP_I32},                                # 12: timezone_shift
+    {"propType": PROP_I8},                                 # 13: daylightmode
+    {"propType": PROP_U32},                                # 14: margin_mode
+    {"propType": PROP_U32},                                # 15: margin_free_mode
+    {"propType": PROP_F64},                                # 16: margin_so_call
+    {"propType": PROP_F64},                                # 17: margin_so_so
+    {"propType": PROP_U32},                                # 18: margin_so_mode
+    {"propType": PROP_F64},                                # 19: margin_virtual
+    {"propType": PROP_U32},                                # 20: margin_free_profit_mode
+    {"propType": PROP_F64},                                # 21: acc_profit
+    {"propType": PROP_F64},                                # 22: commission_daily
+    {"propType": PROP_F64},                                # 23: commission_monthly
+    {"propType": PROP_U32},                                # 24: auth_password_min
+    {"propType": PROP_U32},                                # 25: otp_status
+]
+
+ACCOUNT_WEB_MAIN_FIELD_NAMES = [
+    "account_type",
+    "rights",
+    "permissions_flags",
+    "balance",
+    "credit",
+    "account_currency",
+    "currency_digits",
+    "margin_leverage",
+    "account_name",
+    "server_build",
+    "server_name",
+    "company",
+    "timezone_shift",
+    "daylightmode",
+    "margin_mode",
+    "margin_free_mode",
+    "margin_so_call",
+    "margin_so_so",
+    "margin_so_mode",
+    "margin_virtual",
+    "margin_free_profit_mode",
+    "acc_profit",
+    "commission_daily",
+    "commission_monthly",
+    "auth_password_min",
+    "otp_status",
+]
+
+# ---------------------------------------------------------------------------
+# Account Trade Settings (cmd 3 / cmd 14 variable section)
+# Schema nl / ll in the current Web Terminal bundle.
+# ---------------------------------------------------------------------------
+ACCOUNT_WEB_TRADE_SETTINGS_SCHEMA = [
+    {"propType": PROP_FIXED_STRING, "propLength": 256},    # 0: symbol_path
+    {"propType": PROP_I32},                                # 1: spread_diff
+    {"propType": PROP_I32},                                # 2: spread_diff_balance
+    {"propType": PROP_U32},                                # 3: trade_mode
+    {"propType": PROP_I32},                                # 4: trade_stops_level
+    {"propType": PROP_I32},                                # 5: trade_freeze_level
+    {"propType": PROP_U32},                                # 6: trade_exemode
+    {"propType": PROP_U32},                                # 7: trade_fill_flags
+    {"propType": PROP_U32},                                # 8: trade_time_flags
+    {"propType": PROP_U32},                                # 9: trade_order_flags
+    {"propType": PROP_U32},                                # 10: trade_request_flags
+    {"propType": PROP_U32},                                # 11: trade_request_timeout
+    {"propType": PROP_U32},                                # 12: trade_instant_flags
+    {"propType": PROP_U32},                                # 13: trade_instant_timeout
+    {"propType": PROP_U32},                                # 14: trade_instant_slip_profit
+    {"propType": PROP_U32},                                # 15: trade_instant_slip_losing
+    {"propType": PROP_U64},                                # 16: trade_instant_volume
+    {"propType": PROP_U32},                                # 17: trade_instant_checkmode
+    {"propType": PROP_U32},                                # 18: trade_market_flags
+    {"propType": PROP_U32},                                # 19: trade_exchange_flags
+    {"propType": PROP_U64},                                # 20: volume_min
+    {"propType": PROP_U64},                                # 21: volume_max
+    {"propType": PROP_U64},                                # 22: volume_step
+    {"propType": PROP_U64},                                # 23: volume_limit
+    {"propType": PROP_U32},                                # 24: margin_flags
+    {"propType": PROP_F64},                                # 25: margin_initial
+    {"propType": PROP_F64},                                # 26: margin_maintenance
+    {"propType": PROP_BYTES, "propLength": 64},            # 27: margin_rates_initial
+    {"propType": PROP_BYTES, "propLength": 64},            # 28: margin_rates_maintenance
+    {"propType": PROP_F64},                                # 29: margin_rate_liquidity
+    {"propType": PROP_F64},                                # 30: margin_hedged
+    {"propType": PROP_F64},                                # 31: margin_rate_currency
+    {"propType": PROP_U32},                                # 32: swap_mode
+    {"propType": PROP_F64},                                # 33: swap_long
+    {"propType": PROP_F64},                                # 34: swap_short
+    {"propType": PROP_I32},                                # 35: swap_rollover3days
+    {"propType": PROP_U32},                                # 36: permissions_flags
+    {"propType": PROP_U32},                                # 37: permissions_bookdepth
+    {"propType": PROP_BYTES, "propLength": 56},            # 38: swap_rates
+]
+
+ACCOUNT_WEB_TRADE_SETTINGS_FIELD_NAMES = [
+    "symbol_path",
+    "spread_diff",
+    "spread_diff_balance",
+    "trade_mode",
+    "trade_stops_level",
+    "trade_freeze_level",
+    "trade_exemode",
+    "trade_fill_flags",
+    "trade_time_flags",
+    "trade_order_flags",
+    "trade_request_flags",
+    "trade_request_timeout",
+    "trade_instant_flags",
+    "trade_instant_timeout",
+    "trade_instant_slip_profit",
+    "trade_instant_slip_losing",
+    "trade_instant_volume",
+    "trade_instant_checkmode",
+    "trade_market_flags",
+    "trade_exchange_flags",
+    "volume_min",
+    "volume_max",
+    "volume_step",
+    "volume_limit",
+    "margin_flags",
+    "margin_initial",
+    "margin_maintenance",
+    "margin_rates_initial",
+    "margin_rates_maintenance",
+    "margin_rate_liquidity",
+    "margin_hedged",
+    "margin_rate_currency",
+    "swap_mode",
+    "swap_long",
+    "swap_short",
+    "swap_rollover3days",
+    "permissions_flags",
+    "permissions_bookdepth",
+    "swap_rates",
+]
+
+# ---------------------------------------------------------------------------
+# Account Commission Rules (cmd 3 / cmd 14 variable section)
+# Schema _l / ul in the current Web Terminal bundle.
+# ---------------------------------------------------------------------------
+ACCOUNT_WEB_COMMISSION_SCHEMA = [
+    {"propType": PROP_FIXED_STRING, "propLength": 256},    # 0: path
+    {"propType": PROP_U32},                                # 1: mode
+    {"propType": PROP_U32},                                # 2: mode_range
+    {"propType": PROP_U32},                                # 3: mode_charge
+    {"propType": PROP_FIXED_STRING, "propLength": 32},     # 4: mode_currency
+    {"propType": PROP_U32},                                # 5: mode_entry
+]
+
+ACCOUNT_WEB_COMMISSION_FIELD_NAMES = [
+    "path",
+    "mode",
+    "mode_range",
+    "mode_charge",
+    "mode_currency",
+    "mode_entry",
+]
+
+ACCOUNT_WEB_COMMISSION_TIER_SCHEMA = [
+    {"propType": PROP_U32},                                # 0: mode
+    {"propType": PROP_U32},                                # 1: type
+    {"propType": PROP_F64},                                # 2: value
+    {"propType": PROP_F64},                                # 3: range_from
+    {"propType": PROP_F64},                                # 4: range_to
+    {"propType": PROP_F64},                                # 5: minimal
+    {"propType": PROP_F64},                                # 6: maximal
+    {"propType": PROP_FIXED_STRING, "propLength": 32},     # 7: currency
+]
+
+ACCOUNT_WEB_COMMISSION_TIER_FIELD_NAMES = [
+    "mode",
+    "type",
+    "value",
+    "range_from",
+    "range_to",
+    "minimal",
+    "maximal",
+    "currency",
+]
+
+# ---------------------------------------------------------------------------
+# Account Leverage Rules (cmd 3 / cmd 14 variable section)
+# Schema gl / fl in the current Web Terminal bundle.
+# ---------------------------------------------------------------------------
+ACCOUNT_WEB_LEVERAGE_RULE_SCHEMA = [
+    {"propType": PROP_FIXED_STRING, "propLength": 256},    # 0: path
+    {"propType": PROP_U32},                                # 1: range_mode
+    {"propType": PROP_FIXED_STRING, "propLength": 32},     # 2: range_currency
+    {"propType": PROP_U32},                                # 3: range_currency_digits
+    {"propType": PROP_I32},                                # 4: tier_count
+]
+
+ACCOUNT_WEB_LEVERAGE_RULE_FIELD_NAMES = [
+    "path",
+    "range_mode",
+    "range_currency",
+    "range_currency_digits",
+    "tier_count",
+]
+
+ACCOUNT_WEB_LEVERAGE_TIER_SCHEMA = [
+    {"propType": PROP_F64},                                # 0: range_from
+    {"propType": PROP_F64},                                # 1: range_to
+    {"propType": PROP_F64},                                # 2: margin_rate_initial
+    {"propType": PROP_F64},                                # 3: margin_rate_maintenance
+]
+
+ACCOUNT_WEB_LEVERAGE_TIER_FIELD_NAMES = [
+    "range_from",
+    "range_to",
+    "margin_rate_initial",
+    "margin_rate_maintenance",
+]
+
+# ---------------------------------------------------------------------------
 # Schema / field-name consistency assertions (Phase 3.2)
 # Catches mismatches at import time rather than at runtime.
 # ---------------------------------------------------------------------------
@@ -570,6 +880,28 @@ _SCHEMA_PAIRS = [
     (TRADE_RESULT_RESPONSE_SCHEMA, TRADE_RESULT_RESPONSE_FIELD_NAMES, "TRADE_RESULT_RESPONSE"),
     (CORPORATE_LINK_SCHEMA, CORPORATE_LINK_FIELD_NAMES, "CORPORATE_LINK"),
     (ACCOUNT_BASE_SCHEMA, ACCOUNT_BASE_FIELD_NAMES, "ACCOUNT_BASE"),
+    (ACCOUNT_WEB_MAIN_SCHEMA, ACCOUNT_WEB_MAIN_FIELD_NAMES, "ACCOUNT_WEB_MAIN"),
+    (
+        ACCOUNT_WEB_TRADE_SETTINGS_SCHEMA,
+        ACCOUNT_WEB_TRADE_SETTINGS_FIELD_NAMES,
+        "ACCOUNT_WEB_TRADE_SETTINGS",
+    ),
+    (ACCOUNT_WEB_COMMISSION_SCHEMA, ACCOUNT_WEB_COMMISSION_FIELD_NAMES, "ACCOUNT_WEB_COMMISSION"),
+    (
+        ACCOUNT_WEB_COMMISSION_TIER_SCHEMA,
+        ACCOUNT_WEB_COMMISSION_TIER_FIELD_NAMES,
+        "ACCOUNT_WEB_COMMISSION_TIER",
+    ),
+    (
+        ACCOUNT_WEB_LEVERAGE_RULE_SCHEMA,
+        ACCOUNT_WEB_LEVERAGE_RULE_FIELD_NAMES,
+        "ACCOUNT_WEB_LEVERAGE_RULE",
+    ),
+    (
+        ACCOUNT_WEB_LEVERAGE_TIER_SCHEMA,
+        ACCOUNT_WEB_LEVERAGE_TIER_FIELD_NAMES,
+        "ACCOUNT_WEB_LEVERAGE_TIER",
+    ),
 ]
 
 for _schema, _names, _label in _SCHEMA_PAIRS:

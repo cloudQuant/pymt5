@@ -13,15 +13,17 @@ try:
     from importlib.metadata import version as _pkg_version
     release = _pkg_version("pymt5")
 except Exception:
-    release = "0.6.0"
+    release = "0.7.0"
 
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
-    "sphinx.ext.intersphinx",
     "sphinx_autodoc_typehints",
 ]
+
+if os.environ.get("PYMT5_ENABLE_INTERSPHINX") == "1":
+    extensions.append("sphinx.ext.intersphinx")
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
@@ -34,6 +36,9 @@ autodoc_typehints = "description"
 napoleon_google_docstyle = True
 napoleon_numpy_docstyle = False
 
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-}
+intersphinx_mapping = {}
+
+if "sphinx.ext.intersphinx" in extensions:
+    intersphinx_mapping = {
+        "python": ("https://docs.python.org/3", None),
+    }

@@ -1,6 +1,57 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+- No unreleased changes yet.
+
+v0.7.0 (2026-03-17)
+-------------------
+
+- Added frontend-aligned onboarding commands:
+  ``request_opening_verification`` (cmd=27 structured flow),
+  ``submit_opening_verification`` (cmd=40),
+  ``open_demo_account`` (cmd=30), ``open_real_account`` (cmd=39)
+- Added TOTP management helpers:
+  ``enable_otp`` / ``disable_otp`` (cmd=43)
+- Added account-opening result dataclasses and document payload support
+- Added ``propType=9`` time encoding support to the protocol codec for
+  real-account birth-date serialization
+- Added experimental ``send_bootstrap_command_52()`` helper for the only
+  currently observable reserved command with repeatable live behavior
+- Added official ``MetaTrader5``-style compatibility helpers for session,
+  symbols, rates, orders/positions/history, DOM, and ``order_send()``
+- Added best-effort local-formula compatibility helpers:
+  ``last_error()``, ``order_calc_profit()``, ``order_calc_margin()``
+- Added cached tick-history compatibility helpers:
+  ``copy_ticks_from()`` and ``copy_ticks_range()`` over observed ``cmd=8``
+  pushes
+- Added local ``order_check()`` compatibility pre-flight using symbol rules,
+  cached prices, and local margin estimation
+- Expanded ``cmd=3`` account parsing to expose server/company/timezone and
+  rights metadata from the current frontend account header, plus trade
+  settings, leverage rules, and commission tables
+- Added a conservative ``terminal_info()`` compatibility helper derived from
+  ``cmd=3`` account/server metadata
+- Added a best-effort ``version()`` compatibility helper that returns
+  ``(500, build, release_date)`` from ``cmd=3`` plus observed public
+  Web Terminal build metadata
+- Tightened ``mypy`` compatibility in ``client.py`` by making client-side
+  error helpers and parsed schedule structures explicitly typed
+- Added ``make check`` and ``make package-check`` targets to mirror the main
+  local CI preflight steps, including offline ``build --no-isolation``
+  package verification and ``twine check`` metadata validation
+- Expanded ``cmd=18`` symbol parsing to the current frontend schema, including
+  bond ``face_value`` / ``accrued_interest`` plus nested trade settings,
+  schedule, and subscription sections
+- Added best-effort bond profit/margin formulas for trade calc modes ``37``
+  and ``39``
+- Fixed ``cmd=22`` order-book subscription payloads to match the frontend's
+  ``count + symbol_ids`` format
+- Re-verified the public Web Terminal command surface against build 5687
+  (built on 2026-03-15)
+
 v0.5.0 (2026-03-12)
 --------------------
 

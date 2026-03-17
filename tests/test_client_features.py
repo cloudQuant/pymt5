@@ -4,7 +4,9 @@ stop-limit orders, close-by, push handlers, new constants, crypto roundtrip,
 account info, symbol groups, order book, corporate links, trade transaction,
 trade result push, symbol details push, spread schema."""
 
+import asyncio
 import struct
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -93,6 +95,7 @@ from pymt5.schemas import (
     TRADE_UPDATE_BALANCE_FIELD_NAMES,
     TRADE_UPDATE_BALANCE_SCHEMA,
 )
+from pymt5.transport import CommandResult
 
 # ---- TradeResult ----
 
@@ -260,6 +263,7 @@ def test_client_init_defaults():
     assert client._reconnect_delay == 3.0
     assert client._login_kwargs is None
     assert client._subscribed_ids == []
+    assert client.last_error() == (0, "")
 
 
 def test_client_init_custom():
@@ -284,6 +288,55 @@ def test_client_init_custom():
 def test_is_connected_default():
     client = MT5WebClient()
     assert client.is_connected is False
+
+
+def test_send_raw_command_marks_bootstrap_state_dirty_for_cmd52():
+    client = MT5WebClient()
+    client._bootstrap_pristine = True
+    client.transport.send_command = AsyncMock(
+        return_value=CommandResult(command=52, code=0, body=b""),
+    )
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(client.send_raw_command(52))
+    finally:
+        loop.close()
+
+    assert result.command == 52
+    assert client._bootstrap_pristine is False
+    client.transport.send_command.assert_awaited_once_with(52, b"")
+
+
+def test_send_bootstrap_command_52_requires_pristine_connection():
+    client = MT5WebClient()
+    client.transport.is_ready = True
+
+    loop = asyncio.new_event_loop()
+    try:
+        with pytest.raises(RuntimeError, match="fresh bootstrap-only connection"):
+            loop.run_until_complete(client.send_bootstrap_command_52())
+    finally:
+        loop.close()
+
+
+def test_send_bootstrap_command_52_sends_reserved_command():
+    client = MT5WebClient()
+    client.transport.is_ready = True
+    client._bootstrap_pristine = True
+    client.transport.send_command = AsyncMock(
+        return_value=CommandResult(command=52, code=0, body=b""),
+    )
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(client.send_bootstrap_command_52())
+    finally:
+        loop.close()
+
+    assert result.code == 0
+    assert client._bootstrap_pristine is False
+    client.transport.send_command.assert_awaited_once_with(52)
 
 
 # ---- subscribe_symbols validation ----
@@ -372,20 +425,23 @@ def test_trade_response_schema_size():
 # ---- Full Symbol Schema ----
 
 def test_full_symbol_schema_fields():
-    assert len(FULL_SYMBOL_SCHEMA) == 28
-    assert len(FULL_SYMBOL_FIELD_NAMES) == 28
+    assert len(FULL_SYMBOL_SCHEMA) == 49
+    assert len(FULL_SYMBOL_FIELD_NAMES) == 49
     assert FULL_SYMBOL_FIELD_NAMES[0] == "trade_symbol"
     assert "contract_size" in FULL_SYMBOL_FIELD_NAMES
     assert "tick_size" in FULL_SYMBOL_FIELD_NAMES
     assert "tick_value" in FULL_SYMBOL_FIELD_NAMES
-    assert "margin_initial" in FULL_SYMBOL_FIELD_NAMES
-    assert "volume_min" in FULL_SYMBOL_FIELD_NAMES
     assert "currency_base" in FULL_SYMBOL_FIELD_NAMES
+    assert "face_value" in FULL_SYMBOL_FIELD_NAMES
+    assert "accrued_interest" in FULL_SYMBOL_FIELD_NAMES
+    assert "trade" in FULL_SYMBOL_FIELD_NAMES
+    assert "schedule" in FULL_SYMBOL_FIELD_NAMES
+    assert "subscription" in FULL_SYMBOL_FIELD_NAMES
 
 
 def test_full_symbol_schema_size():
     size = get_series_size(FULL_SYMBOL_SCHEMA)
-    assert size > 526
+    assert size == 3068
 
 
 # ---- Package Exports ----
@@ -667,7 +723,7 @@ def test_on_book_update_handler_registration():
     client = MT5WebClient()
     client.on_book_update(lambda data: None)
     assert CMD_BOOK_PUSH in client.transport._listeners
-    assert len(client.transport._listeners[CMD_BOOK_PUSH]) == 1
+    assert len(client.transport._listeners[CMD_BOOK_PUSH]) == 2
 
 
 # ---- Transport listener management ----
@@ -689,7 +745,7 @@ def test_transport_off_clears_all():
     client = MT5WebClient()
     client.transport.on(CMD_TICK_PUSH, lambda r: None)
     client.transport.on(CMD_TICK_PUSH, lambda r: None)
-    assert len(client.transport._listeners[CMD_TICK_PUSH]) == 2
+    assert len(client.transport._listeners[CMD_TICK_PUSH]) == 3
     client.transport.off(CMD_TICK_PUSH)
     assert len(client.transport._listeners[CMD_TICK_PUSH]) == 0
 

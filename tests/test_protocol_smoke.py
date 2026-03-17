@@ -98,6 +98,15 @@ def test_utf16le_empty_string():
     assert decode_utf16le(encoded) == ""
 
 
+def test_prop_time_roundtrip():
+    from pymt5.constants import PROP_TIME
+
+    ts_ms = 1710501234567
+    payload = SeriesCodec.serialize([(PROP_TIME, ts_ms)])
+    assert len(payload) == 8
+    assert SeriesCodec.parse(payload, [{"propType": PROP_TIME}]) == [ts_ms]
+
+
 def test_login_payload_password_is_utf16le():
     client = MT5WebClient()
     payload = client._build_login_payload(

@@ -14,6 +14,9 @@ through a clean async Python API.
    api
    trading
    push_notifications
+   command_coverage
+   python_api_compat
+   python_api_detailed_comparison
    changelog
 
 Features

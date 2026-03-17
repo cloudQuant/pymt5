@@ -1,7 +1,7 @@
-.PHONY: test lint format docs typecheck
+.PHONY: test lint format docs typecheck package-check check
 
 test:
-	python -m pytest tests/ -v --tb=short
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin tests/ -v --tb=short
 
 lint:
 	ruff check pymt5/ tests/
@@ -14,3 +14,9 @@ docs:
 
 typecheck:
 	python -m mypy pymt5/ --ignore-missing-imports --no-strict-optional
+
+package-check:
+	python -m build --no-isolation
+	python -m twine check dist/*
+
+check: lint typecheck test docs package-check

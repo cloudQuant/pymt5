@@ -7,9 +7,20 @@ try:
     from importlib.metadata import version as _pkg_version
     __version__ = _pkg_version("pymt5")
 except Exception:
-    __version__ = "0.6.0"
+    __version__ = "0.7.0"
 
-from pymt5.client import AccountInfo, MT5WebClient, SymbolInfo, TradeResult
+from pymt5.client import (
+    AccountDocument,
+    AccountInfo,
+    AccountOpeningRequest,
+    DemoAccountRequest,
+    MT5WebClient,
+    OpenAccountResult,
+    RealAccountRequest,
+    SymbolInfo,
+    TradeResult,
+    VerificationStatus,
+)
 from pymt5.constants import (
     CMD_ACCOUNT_UPDATE_PUSH,
     CMD_BOOK_PUSH,
@@ -17,10 +28,16 @@ from pymt5.constants import (
     CMD_GET_ACCOUNT,
     CMD_GET_CORPORATE_LINKS,
     CMD_GET_SYMBOL_GROUPS,
+    CMD_OPEN_REAL,
+    CMD_OTP_SETUP,
+    CMD_SEND_VERIFY_CODES,
     CMD_SUBSCRIBE_BOOK,
     CMD_SYMBOL_DETAILS_PUSH,
     CMD_TRADE_RESULT_PUSH,
     CMD_TRADE_UPDATE_PUSH,
+    COPY_TICKS_ALL,
+    COPY_TICKS_INFO,
+    COPY_TICKS_TRADE,
     # Deal entry
     DEAL_ENTRY_IN,
     DEAL_ENTRY_INOUT,
@@ -105,6 +122,12 @@ __all__ = [
     "TradeResult",
     "SymbolInfo",
     "AccountInfo",
+    "VerificationStatus",
+    "OpenAccountResult",
+    "AccountOpeningRequest",
+    "DemoAccountRequest",
+    "RealAccountRequest",
+    "AccountDocument",
     # Command IDs
     "CMD_GET_ACCOUNT",
     "CMD_GET_SYMBOL_GROUPS",
@@ -115,6 +138,12 @@ __all__ = [
     "CMD_SUBSCRIBE_BOOK",
     "CMD_BOOK_PUSH",
     "CMD_GET_CORPORATE_LINKS",
+    "CMD_OPEN_REAL",
+    "CMD_SEND_VERIFY_CODES",
+    "CMD_OTP_SETUP",
+    "COPY_TICKS_INFO",
+    "COPY_TICKS_TRADE",
+    "COPY_TICKS_ALL",
     # Periods
     "PERIOD_M1",
     "PERIOD_M5",

@@ -23,11 +23,14 @@ Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary p
 - Login (cmd=28) with UTF-16LE encoded fields
 - `ping`, `logout`, `change_password`, `trader_params`
 - `verify_code` (cmd=27) — two-factor authentication
-- `open_demo` (cmd=30) — demo account creation
+- `request_opening_verification` / `submit_opening_verification` (cmd=27/40)
+- `open_demo_account` (cmd=30) and `open_real_account` (cmd=39)
+- `enable_otp` / `disable_otp` (cmd=43)
+- `open_demo` (cmd=30) — legacy init-style wrapper kept for compatibility
 - `send_notification` (cmd=42) — server notifications
 
 ### Account Data
-- **`get_account` (cmd=3)** — full account information: balance, credit, currency, leverage, name, trade_mode
+- **`get_account` (cmd=3)** — account metadata and balance state: balance, credit, currency, leverage, account/server/company names, timezone, rights flags, trade settings, leverage rules, commission tables
 - `get_account_summary()` — `AccountInfo` dataclass (uses cmd=3 + positions)
 - `get_positions_and_orders` (cmd=4) — open positions and pending orders
 - `get_positions()` — convenience: open positions only
@@ -38,13 +41,23 @@ Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary p
 ### Market Data
 - `get_symbols` (cmd=34, zlib compressed) — full symbol list with metadata
 - **`get_symbol_groups` (cmd=9)** — category tree (Forex, Crypto, Indexes, etc.)
-- `get_full_symbol_info` (cmd=18) — detailed contract specs (tick size, margins, volumes)
+- `get_full_symbol_info` (cmd=18) — detailed contract specs (tick size, margins, volumes, bond face value/accrued interest, trade schedule, subscription flags)
 - **`get_spreads` (cmd=20)** — spread data with proper schema parsing
 - `get_rates` (cmd=11) — historical OHLCV bars (M1 to MN1), auto-detects extended format with `real_volume`
 - `subscribe_ticks` (cmd=7) — real-time tick push (cmd=8) with callback
 - `subscribe_symbols` — name-based tick subscription (resolves names via symbol cache)
 - **`subscribe_book` (cmd=22)** — order book / depth-of-market subscription
 - **`subscribe_book_by_name`** — name-based order book subscription
+
+### Official MetaTrader5-style Helpers
+- Session/account: `initialize`, `shutdown`, `account_info`, `terminal_info`, `version`
+- Compatibility state: `last_error`
+- Symbols/history: `symbols_total`, `symbols_get`, `symbol_info`, `positions_total`, `positions_get`, `orders_total`, `orders_get`, `history_orders_*`, `history_deals_*`
+- Bars/trading: `copy_rates_range`, `copy_rates_from`, `copy_rates_from_pos`, `copy_ticks_from`, `copy_ticks_range`, `order_send`, `order_check`
+- Local formula helpers: `order_calc_profit`, `order_calc_margin` (best-effort for forex/CFD/futures/stock/bond modes that the current Web Terminal computes client-side)
+- DOM/cache helpers: `market_book_add`, `market_book_get`, `market_book_release`, `symbol_select`, `symbol_info_tick`
+- `terminal_info` and `version` are best-effort Web Terminal views derived from `cmd=3` plus observed public build metadata
+- `copy_ticks_*` are cached views over observed `cmd=8` pushes, and `order_check` is a local compatibility-layer pre-flight rather than a server RPC
 
 ### Trading
 - **Raw**: `trade_request` — full control over all trade fields, returns `TradeResult`
@@ -69,6 +82,7 @@ Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary p
 ### Miscellaneous Commands
 - **`get_corporate_links` (cmd=44)** — broker links (support, education, social)
 - `send_raw_command` — send any command with raw payload
+- `send_bootstrap_command_52` — experimental wrapper for reserved bootstrap-only `cmd=52`
 
 ### Push Notifications
 - `on_tick(callback)` — real-time tick pushes (cmd=8)
@@ -100,9 +114,9 @@ Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary p
 - Command IDs exported: `CMD_GET_ACCOUNT`, `CMD_GET_SYMBOL_GROUPS`, `CMD_TRADE_UPDATE_PUSH`, `CMD_ACCOUNT_UPDATE_PUSH`, `CMD_SYMBOL_DETAILS_PUSH`, `CMD_TRADE_RESULT_PUSH`, `CMD_SUBSCRIBE_BOOK`, `CMD_BOOK_PUSH`, `CMD_GET_CORPORATE_LINKS`
 
 ### Tests
-- 104 offline unit tests: protocol, schemas, roundtrip parsing, trade constants, symbol cache, volume conversion, reconnect logic, AccountInfo, trade response parsing, full symbol schema, crypto roundtrip, push handler registration, extended rate bars, new schemas
+- 206 offline unit tests: protocol, schemas, roundtrip parsing, trade constants, symbol cache, volume conversion, reconnect logic, compatibility helpers, onboarding/OTP flows, local formula logic, full symbol schema, push handler registration, and extended rate/tick parsing
 
-Live-verified against MetaQuotes-Demo (2026-03-12): 6,104 symbols, 6 symbol groups, account info, positions, 60 M1 bars, deals, orders, tick push, all 9 order types, order book subscription, corporate links, notifications, verify code, trader params.
+Live-verified against MetaQuotes-Demo on 2026-03-16. The current official Web Terminal reports build 5687, built on 2026-03-15. Verified features include: 6,104 symbols, 6 symbol groups, account info, positions, 60 M1 bars, deals, orders, tick push, all 9 order types, order book subscription, corporate links, notifications, verify code, trader params, and the current onboarding / OTP flows.
 
 ## Install
 
@@ -122,6 +136,7 @@ For development (tests + type checking):
 
 ```bash
 pip install -e ".[dev]"
+make check
 ```
 
 ## Quick Start
@@ -307,13 +322,17 @@ python examples/01_connect_and_account.py
 | 28 | Login | Implemented |
 | 29 | Init Session | Implemented |
 | 30 | Open Demo | Implemented |
+| 39 | Open Real Account | Implemented |
+| 40 | Send Verification Codes | Implemented |
 | 34 | Get Symbols (gzip) | Implemented |
 | 41 | Trader Params | Implemented |
 | 42 | Notify | Implemented |
+| 43 | OTP Setup / Disable | Implemented |
 | 44 | Get Corporate Links | **NEW** — broker links |
 | 51 | Ping | Implemented |
+| 52 | Reserved Bootstrap Command | **EXPERIMENTAL** — bootstrap-only helper with unknown business meaning |
 
-Commands 21, 25, 33, 37, 39, 40, 43, 50, 52, 100-112 are accepted by the server but have no usage in the Web Terminal JavaScript source. CMD 39 (Open Real Account) and 43 (OTP Setup) have schemas but require specialized registration/2FA flows.
+Commands 21, 25, 33, 37, 50, 52, 100-112 are still accepted by the transport allowlist but have no direct usage in the current public Web Terminal JavaScript source. Live probing on 2026-03-16 showed that 21, 25, 33, 37, 50, 100-112 time out with an empty payload, while 52 only returns an empty ACK on a pristine bootstrap-only socket and causes the server to drop the connection after `cmd=29` or `cmd=28`. Commands 39, 40, and 43 are now implemented in `pymt5`.
 
 ## Documentation
 
@@ -337,10 +356,15 @@ This project uses GitHub Actions for continuous integration, testing across:
 | **Windows** (windows-latest) | ✅ | ✅ | ✅ |
 
 The CI pipeline also runs mypy type checking and builds the Sphinx documentation.
+For a local pre-push pass, run:
+
+```bash
+make check
+```
 
 ## Notes
 
-- This package is experimental and tracks the MT5 Web Terminal protocol as observed on 2026-03-12
+- This package is experimental and tracks the MT5 Web Terminal protocol as observed in the public Web Terminal build 5687 (built on 2026-03-15)
 - MetaQuotes may change the protocol at any time
 - Volume encoding: MT5 uses integer volumes where `volume = lots × 10^precision`. The MetaQuotes demo server uses precision=8, so 1.0 lot = 100,000,000 and 0.01 lot = 1,000,000
 - `get_account()` (cmd=3) returns balance, credit, currency, leverage, and name. Equity, margin, and profit are computed from positions
