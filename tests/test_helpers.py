@@ -17,6 +17,7 @@ from pymt5.helpers import (
 
 # ---- hex_to_bytes / bytes_to_hex ----
 
+
 def test_hex_to_bytes():
     assert hex_to_bytes("48656c6c6f") == b"Hello"
 
@@ -37,6 +38,7 @@ def test_hex_empty():
 
 # ---- obfuscation_decode ----
 
+
 def test_obfuscation_decode_basic():
     # Each char's code is shifted down by 1, except 28→'&' and 23→'!'
     # 'B' (66) should decode from chr(67) = 'C'
@@ -55,6 +57,7 @@ def test_obfuscation_decode_string():
 
 # ---- random_command_prefix ----
 
+
 def test_random_command_prefix_length():
     prefix = random_command_prefix()
     assert len(prefix) == 2
@@ -68,6 +71,7 @@ def test_random_command_prefix_randomness():
 
 
 # ---- encode_utf16le / decode_utf16le ----
+
 
 def test_encode_utf16le_basic():
     result = encode_utf16le("AB", 64)
@@ -118,6 +122,7 @@ def test_utf16le_roundtrip_unicode():
 
 # ---- pad_ascii / truncate_ascii ----
 
+
 def test_pad_ascii():
     result = pad_ascii("AB", 8)
     assert result == b"AB\x00\x00\x00\x00\x00\x00"
@@ -136,6 +141,7 @@ def test_truncate_ascii():
 
 # ---- pad_bytes ----
 
+
 def test_pad_bytes():
     result = pad_bytes(b"AB", 8)
     assert result == b"AB\x00\x00\x00\x00\x00\x00"
@@ -147,6 +153,7 @@ def test_pad_bytes_truncation():
 
 
 # ---- strip_fixed_string ----
+
 
 def test_strip_fixed_string():
     assert strip_fixed_string(b"hello\x00world") == "hello"
@@ -161,6 +168,7 @@ def test_strip_fixed_string_empty():
 
 
 # ---- build_client_id ----
+
 
 def test_build_client_id_length():
     cid = build_client_id()

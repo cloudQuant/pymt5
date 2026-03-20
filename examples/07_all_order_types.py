@@ -27,6 +27,9 @@ from pymt5 import (
     ORDER_TYPE_SELL,
     ORDER_FILLING_FOK,
     TRADE_ACTION_DEAL,
+    AuthenticationError,
+    MT5ConnectionError,
+    PyMT5Error,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -38,6 +41,7 @@ PASSWORD = "NyCh-i4r"
 
 
 async def main():
+  try:
     async with MT5WebClient(uri=SERVER, timeout=30) as client:
         await client.login(login=LOGIN, password=PASSWORD)
         await client.load_symbols()
@@ -161,6 +165,12 @@ async def main():
         log.info(f"Final: {len(final['positions'])} positions, {len(final['orders'])} orders")
 
     log.info("Done")
+  except MT5ConnectionError as e:
+    log.error(f"Connection failed: {e}")
+  except AuthenticationError as e:
+    log.error(f"Login failed: {e}")
+  except PyMT5Error as e:
+    log.error(f"MT5 error: {e}")
 
 
 if __name__ == "__main__":

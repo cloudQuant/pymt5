@@ -99,6 +99,7 @@ from pymt5.transport import CommandResult
 
 # ---- TradeResult ----
 
+
 def test_trade_result_success():
     tr = TradeResult(retcode=TRADE_RETCODE_DONE, description="done", success=True)
     assert tr.success is True
@@ -114,9 +115,17 @@ def test_trade_result_failure():
 
 def test_trade_result_extended_fields():
     tr = TradeResult(
-        retcode=TRADE_RETCODE_DONE, description="done", success=True,
-        deal=123456, order=789012, volume=100, price=1.12345,
-        bid=1.12340, ask=1.12350, comment="test", request_id=42,
+        retcode=TRADE_RETCODE_DONE,
+        description="done",
+        success=True,
+        deal=123456,
+        order=789012,
+        volume=100,
+        price=1.12345,
+        bid=1.12340,
+        ask=1.12350,
+        comment="test",
+        request_id=42,
     )
     assert tr.deal == 123456
     assert tr.order == 789012
@@ -151,6 +160,7 @@ def test_trade_retcode_descriptions_complete():
 
 # ---- SymbolInfo ----
 
+
 def test_symbol_info_creation():
     si = SymbolInfo(name="EURUSD", symbol_id=42, digits=5, description="Euro vs US Dollar")
     assert si.name == "EURUSD"
@@ -169,6 +179,7 @@ def test_symbol_info_defaults():
 
 # ---- Symbol Cache ----
 
+
 def test_symbol_cache_manual():
     client = MT5WebClient()
     client._symbols["EURUSD"] = SymbolInfo(name="EURUSD", symbol_id=42, digits=5)
@@ -184,6 +195,7 @@ def test_symbol_cache_manual():
 
 
 # ---- Volume Conversion ----
+
 
 def test_volume_to_lots_default_precision():
     assert MT5WebClient._volume_to_lots(0.01) == 1_000_000
@@ -205,6 +217,7 @@ def test_volume_to_lots_rounding():
 
 # ---- Digits Resolution ----
 
+
 def test_resolve_digits_explicit():
     client = MT5WebClient()
     assert client._resolve_digits("EURUSD", 3) == 3
@@ -222,6 +235,7 @@ def test_resolve_digits_fallback():
 
 
 # ---- Trade Constants ----
+
 
 def test_trade_action_constants():
     assert TRADE_ACTION_DEAL == 1
@@ -249,6 +263,7 @@ def test_time_constants():
 
 
 # ---- Client Init ----
+
 
 def test_client_init_defaults():
     client = MT5WebClient()
@@ -284,6 +299,7 @@ def test_client_init_custom():
 
 
 # ---- is_connected ----
+
 
 def test_is_connected_default():
     client = MT5WebClient()
@@ -341,9 +357,11 @@ def test_send_bootstrap_command_52_sends_reserved_command():
 
 # ---- subscribe_symbols validation ----
 
+
 def test_subscribe_symbols_missing_raises():
     client = MT5WebClient()
     import asyncio
+
     with pytest.raises(ValueError, match="symbols not found in cache"):
         loop = asyncio.new_event_loop()
         try:
@@ -353,6 +371,7 @@ def test_subscribe_symbols_missing_raises():
 
 
 # ---- on_disconnect callback ----
+
 
 def test_on_disconnect_callback():
     client = MT5WebClient()
@@ -374,6 +393,7 @@ def test_handle_disconnect_no_auto_reconnect():
 
 # ---- AccountInfo ----
 
+
 def test_account_info_defaults():
     ai = AccountInfo()
     assert ai.balance == 0.0
@@ -389,9 +409,15 @@ def test_account_info_defaults():
 
 def test_account_info_with_values():
     ai = AccountInfo(
-        balance=10000.0, equity=10500.0, margin=200.0,
-        margin_free=10300.0, profit=500.0, leverage=100,
-        currency="USD", positions_count=3, orders_count=1,
+        balance=10000.0,
+        equity=10500.0,
+        margin=200.0,
+        margin_free=10300.0,
+        profit=500.0,
+        leverage=100,
+        currency="USD",
+        positions_count=3,
+        orders_count=1,
     )
     assert ai.balance == 10000.0
     assert ai.equity == 10500.0
@@ -399,6 +425,7 @@ def test_account_info_with_values():
 
 
 # ---- Trade Response Parsing ----
+
 
 def test_parse_trade_response_empty():
     client = MT5WebClient()
@@ -424,6 +451,7 @@ def test_trade_response_schema_size():
 
 # ---- Full Symbol Schema ----
 
+
 def test_full_symbol_schema_fields():
     assert len(FULL_SYMBOL_SCHEMA) == 49
     assert len(FULL_SYMBOL_FIELD_NAMES) == 49
@@ -446,8 +474,10 @@ def test_full_symbol_schema_size():
 
 # ---- Package Exports ----
 
+
 def test_package_exports():
     import pymt5
+
     assert isinstance(pymt5.__version__, str)
     assert len(pymt5.__version__) > 0
     assert hasattr(pymt5, "MT5WebClient")
@@ -463,6 +493,7 @@ def test_package_exports():
 
 def test_package_exports_new_constants():
     import pymt5
+
     assert hasattr(pymt5, "TRADE_ACTION_CLOSE_BY")
     assert pymt5.TRADE_ACTION_CLOSE_BY == 10
     assert hasattr(pymt5, "ORDER_TYPE_BUY_STOP_LIMIT")
@@ -492,6 +523,7 @@ def test_package_exports_new_constants():
 
 def test_package_exports_v050_commands():
     import pymt5
+
     assert hasattr(pymt5, "CMD_GET_ACCOUNT")
     assert pymt5.CMD_GET_ACCOUNT == 3
     assert hasattr(pymt5, "CMD_GET_SYMBOL_GROUPS")
@@ -514,6 +546,7 @@ def test_package_exports_v050_commands():
 
 def test_package_exports_all_deal_types():
     import pymt5
+
     assert pymt5.DEAL_TYPE_CHARGE == 4
     assert pymt5.DEAL_TYPE_CORRECTION == 5
     assert pymt5.DEAL_TYPE_BONUS == 6
@@ -529,11 +562,13 @@ def test_package_exports_all_deal_types():
 
 def test_package_exports_order_state_expired():
     import pymt5
+
     assert hasattr(pymt5, "ORDER_STATE_EXPIRED")
     assert pymt5.ORDER_STATE_EXPIRED == 6
 
 
 # ---- New Constants Values ----
+
 
 def test_position_type_constants():
     assert POSITION_TYPE_BUY == 0
@@ -578,6 +613,7 @@ def test_symbol_trade_mode_constants():
 
 # ---- AccountInfo server field ----
 
+
 def test_account_info_server_field():
     ai = AccountInfo(server="MetaQuotes-Demo", currency="USD")
     assert ai.server == "MetaQuotes-Demo"
@@ -590,6 +626,7 @@ def test_account_info_server_default():
 
 
 # ---- Crypto Roundtrip ----
+
 
 def test_aes_cipher_roundtrip():
     key = initial_key_bytes()
@@ -631,6 +668,7 @@ def test_aes_cipher_invalid_key_length():
 
 # ---- Extended Rate Bar Schema ----
 
+
 def test_rate_bar_ext_schema_size():
     assert get_series_size(RATE_BAR_SCHEMA_EXT) == 56
 
@@ -654,9 +692,11 @@ def test_parse_rate_bars_standard_still_works():
 
 # ---- Close Position Direction Detection ----
 
+
 def test_detect_close_direction_defaults_to_sell():
     client = MT5WebClient()
     import asyncio
+
     loop = asyncio.new_event_loop()
     try:
         result = loop.run_until_complete(client._detect_close_direction(999))
@@ -666,6 +706,7 @@ def test_detect_close_direction_defaults_to_sell():
 
 
 # ---- Push Handler Registration ----
+
 
 def test_on_trade_update_handler_registration():
     client = MT5WebClient()
@@ -677,6 +718,7 @@ def test_on_trade_update_handler_registration():
 
 def test_on_symbol_update_handler_registration():
     from pymt5.constants import CMD_SYMBOL_UPDATE_PUSH
+
     client = MT5WebClient()
     client.on_symbol_update(lambda result: None)
     assert CMD_SYMBOL_UPDATE_PUSH in client.transport._listeners
@@ -685,6 +727,7 @@ def test_on_symbol_update_handler_registration():
 
 def test_on_login_status_handler_registration():
     from pymt5.constants import CMD_LOGIN_STATUS_PUSH
+
     client = MT5WebClient()
     client.on_login_status(lambda result: None)
     assert CMD_LOGIN_STATUS_PUSH in client.transport._listeners
@@ -728,11 +771,14 @@ def test_on_book_update_handler_registration():
 
 # ---- Transport listener management ----
 
+
 def test_transport_off_removes_listener():
     from pymt5.constants import CMD_TICK_PUSH
+
     client = MT5WebClient()
 
-    def handler(result): return None
+    def handler(result):
+        return None
 
     client.transport.on(CMD_TICK_PUSH, handler)
     assert handler in client.transport._listeners[CMD_TICK_PUSH]
@@ -742,6 +788,7 @@ def test_transport_off_removes_listener():
 
 def test_transport_off_clears_all():
     from pymt5.constants import CMD_TICK_PUSH
+
     client = MT5WebClient()
     client.transport.on(CMD_TICK_PUSH, lambda r: None)
     client.transport.on(CMD_TICK_PUSH, lambda r: None)
@@ -751,6 +798,7 @@ def test_transport_off_clears_all():
 
 
 # ---- New Schema Sizes and Field Counts ----
+
 
 def test_account_base_schema():
     assert len(ACCOUNT_BASE_SCHEMA) == 25
@@ -851,8 +899,10 @@ def test_corporate_link_schema():
 
 # ---- Schema Roundtrip Parsing ----
 
+
 def test_account_base_roundtrip():
     from pymt5.helpers import encode_utf16le
+
     login_bytes = (12345678).to_bytes(8, "little", signed=False)
     body = login_bytes
     body += struct.pack("<iiii", 0, 100, 200, 0)  # trade_mode, leverage, limit_orders, margin_so_mode
@@ -878,6 +928,7 @@ def test_account_base_roundtrip():
 
 def test_spread_schema_roundtrip():
     from pymt5.helpers import encode_utf16le
+
     body = struct.pack("<I", 1)  # count = 1
     body += struct.pack("<II", 42, 0)  # spread_id, flags
     body += encode_utf16le("EURUSD", 64)
@@ -892,6 +943,7 @@ def test_spread_schema_roundtrip():
 
 def test_corporate_link_roundtrip():
     from pymt5.helpers import encode_utf16le
+
     body = struct.pack("<I", 1)  # count
     body += struct.pack("<I", 1)  # link_type
     body += encode_utf16le("https://support.example.com", 512)
@@ -935,9 +987,11 @@ def test_trade_transaction_roundtrip():
 
 # ---- subscribe_book_by_name validation ----
 
+
 def test_subscribe_book_by_name_missing_raises():
     client = MT5WebClient()
     import asyncio
+
     with pytest.raises(ValueError, match="symbols not found in cache"):
         loop = asyncio.new_event_loop()
         try:
@@ -947,6 +1001,7 @@ def test_subscribe_book_by_name_missing_raises():
 
 
 # ---- New CMD constant values ----
+
 
 def test_new_cmd_constants():
     assert CMD_GET_ACCOUNT == 3

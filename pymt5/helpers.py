@@ -48,7 +48,7 @@ def decode_utf16le(data: bytes) -> str:
     """Decode a UTF-16LE fixed-size buffer, stopping at first null char."""
     result = []
     for i in range(0, len(data) - 1, 2):
-        code = int.from_bytes(data[i:i+2], "little")
+        code = int.from_bytes(data[i : i + 2], "little")
         if code == 0:
             break
         result.append(chr(code))

@@ -10,6 +10,7 @@ from pymt5.transport import CommandResult, MT5WebSocketTransport
 
 # ---- Init ----
 
+
 def test_transport_init_defaults():
     t = MT5WebSocketTransport(uri="wss://example.com")
     assert t.uri == "wss://example.com"
@@ -28,6 +29,7 @@ def test_transport_init_custom_timeout():
 
 # ---- on / off listener management ----
 
+
 def _noop(r):
     return None
 
@@ -41,8 +43,11 @@ def test_on_registers_listener():
 def test_off_removes_specific_listener():
     t = MT5WebSocketTransport(uri="wss://x")
 
-    def cb1(r): return None
-    def cb2(r): return None
+    def cb1(r):
+        return None
+
+    def cb2(r):
+        return None
 
     t.on(CMD_TICK_PUSH, cb1)
     t.on(CMD_TICK_PUSH, cb2)
@@ -68,6 +73,7 @@ def test_off_nonexistent_callback_no_error():
 
 # ---- _dispatch ----
 
+
 async def test_dispatch_resolves_pending_future():
     t = MT5WebSocketTransport(uri="wss://x")
     loop = asyncio.get_running_loop()
@@ -75,6 +81,7 @@ async def test_dispatch_resolves_pending_future():
     t._pending[CMD_TICK_PUSH].append(future)
 
     from pymt5.protocol import ResponseFrame
+
     frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"test")
     await t._dispatch(frame)
 
@@ -90,6 +97,7 @@ async def test_dispatch_calls_listeners():
     t.on(CMD_TICK_PUSH, lambda r: received.append(r))
 
     from pymt5.protocol import ResponseFrame
+
     frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"data")
     await t._dispatch(frame)
 
@@ -107,6 +115,7 @@ async def test_dispatch_calls_async_listener():
     t.on(CMD_TICK_PUSH, async_handler)
 
     from pymt5.protocol import ResponseFrame
+
     frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"async")
     await t._dispatch(frame)
 
@@ -124,6 +133,7 @@ async def test_dispatch_skips_done_futures():
     t._pending[CMD_TICK_PUSH].append(pending_future)
 
     from pymt5.protocol import ResponseFrame
+
     frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"x")
     await t._dispatch(frame)
 
@@ -132,6 +142,7 @@ async def test_dispatch_skips_done_futures():
 
 
 # ---- _fail_all ----
+
 
 def test_fail_all_sets_exceptions():
     t = MT5WebSocketTransport(uri="wss://x")
@@ -173,6 +184,7 @@ def test_fail_all_skips_done_futures():
 
 # ---- Invalid command validation ----
 
+
 async def test_send_raw_invalid_command_raises():
     t = MT5WebSocketTransport(uri="wss://x")
     with pytest.raises(ValueError, match="unsupported command"):
@@ -195,6 +207,7 @@ async def test_send_command_no_ws_raises():
 
 # ---- CommandResult ----
 
+
 def test_command_result_dataclass():
     cr = CommandResult(command=8, code=0, body=b"hello")
     assert cr.command == 8
@@ -204,6 +217,8 @@ def test_command_result_dataclass():
 
 # ---- Module-level proxy detection cache ----
 
+
 def test_ws_connect_has_proxy_is_bool():
     from pymt5.transport import _WS_CONNECT_HAS_PROXY
+
     assert isinstance(_WS_CONNECT_HAS_PROXY, bool)

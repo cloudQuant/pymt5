@@ -18,7 +18,7 @@ import time
 os.environ.setdefault("NO_PROXY", "*")
 os.environ.setdefault("no_proxy", "*")
 
-from pymt5 import MT5WebClient, PERIOD_M1, PERIOD_H1, PERIOD_D1
+from pymt5 import MT5WebClient, PERIOD_M1, PERIOD_H1, PERIOD_D1, AuthenticationError, MT5ConnectionError, PyMT5Error
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("example02")
@@ -29,6 +29,7 @@ PASSWORD = "NyCh-i4r"
 
 
 async def main():
+  try:
     async with MT5WebClient(uri=SERVER, timeout=30) as client:
         await client.login(login=LOGIN, password=PASSWORD)
         log.info("Logged in")
@@ -108,6 +109,12 @@ async def main():
             log.info(f"  {t}  O={b['open']:.2f}  H={b['high']:.2f}  L={b['low']:.2f}  C={b['close']:.2f}")
 
     log.info("Done")
+  except MT5ConnectionError as e:
+    log.error(f"Connection failed: {e}")
+  except AuthenticationError as e:
+    log.error(f"Login failed: {e}")
+  except PyMT5Error as e:
+    log.error(f"MT5 error: {e}")
 
 
 if __name__ == "__main__":

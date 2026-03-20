@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymt5"
-version = "0.7.0"
+version = "0.8.0"
 description = "Python client for MT5 Web Terminal via reverse-engineered WebSocket binary protocol"
 readme = "README.md"
 license = "MIT"
@@ -26,9 +26,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "websockets>=12.0",
-    "aiohttp>=3.9",
-    "cryptography>=42.0.0",
+    "websockets>=13.0,<16",
+    "aiohttp>=3.9,<4",
+    "cryptography>=42.0.0,<45",
 ]
 
 [project.optional-dependencies]

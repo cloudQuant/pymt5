@@ -5,6 +5,7 @@ Reverse-engineered WebSocket binary protocol implementation.
 
 try:
     from importlib.metadata import version as _pkg_version
+
     __version__ = _pkg_version("pymt5")
 except Exception:
     __version__ = "0.7.0"
@@ -116,6 +117,17 @@ from pymt5.constants import (
     TRADE_RETCODE_DONE_PARTIAL,
     TRADE_RETCODE_PLACED,
 )
+from pymt5.exceptions import (
+    AuthenticationError,
+    MT5ConnectionError,
+    MT5TimeoutError,
+    ProtocolError,
+    PyMT5Error,
+    SessionError,
+    SymbolNotFoundError,
+    TradeError,
+    ValidationError,
+)
 
 __all__ = [
     "MT5WebClient",
@@ -128,6 +140,16 @@ __all__ = [
     "DemoAccountRequest",
     "RealAccountRequest",
     "AccountDocument",
+    # Exceptions
+    "PyMT5Error",
+    "MT5ConnectionError",
+    "AuthenticationError",
+    "TradeError",
+    "ProtocolError",
+    "SymbolNotFoundError",
+    "ValidationError",
+    "SessionError",
+    "MT5TimeoutError",
     # Command IDs
     "CMD_GET_ACCOUNT",
     "CMD_GET_SYMBOL_GROUPS",

@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import inspect as _inspect
 import logging
+import struct
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -141,7 +142,7 @@ class MT5WebSocketTransport:
                     frame = parse_response_frame(decrypted)
                     logger.debug("recv cmd=%d code=%d body=%d bytes", frame.command, frame.code, len(frame.body))
                     await self._dispatch(frame)
-                except Exception as exc:
+                except (struct.error, ValueError, TypeError, IndexError) as exc:
                     logger.error("recv_loop parse error: %s", exc)
                     continue
         except asyncio.CancelledError:
@@ -173,4 +174,3 @@ class MT5WebSocketTransport:
                 future = queue.popleft()
                 if not future.done():
                     future.set_exception(exc)
-

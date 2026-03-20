@@ -194,8 +194,7 @@ class SeriesCodec:
         available = len(buffer) - offset
         if available < required:
             raise ValueError(
-                f"buffer too short: need {required} bytes from offset {offset}, "
-                f"but only {available} bytes available"
+                f"buffer too short: need {required} bytes from offset {offset}, but only {available} bytes available"
             )
         values: list[Any] = []
         cursor = offset
@@ -227,28 +226,28 @@ class SeriesCodec:
                 values.append(struct.unpack_from("<d", buffer, cursor)[0])
                 cursor += 8
             elif prop_type == PROP_TIME:
-                values.append(_filetime_to_unix_ms(buffer[cursor:cursor + 8]))
+                values.append(_filetime_to_unix_ms(buffer[cursor : cursor + 8]))
                 cursor += 8
             elif prop_type == PROP_I64:
-                values.append(int.from_bytes(buffer[cursor:cursor + 8], "little", signed=True))
+                values.append(int.from_bytes(buffer[cursor : cursor + 8], "little", signed=True))
                 cursor += 8
             elif prop_type == PROP_U64:
-                values.append(int.from_bytes(buffer[cursor:cursor + 8], "little", signed=False))
+                values.append(int.from_bytes(buffer[cursor : cursor + 8], "little", signed=False))
                 cursor += 8
             elif prop_type == PROP_FIXED_STRING:
                 if prop_length is None:
                     raise ValueError("fixed string requires propLength")
-                values.append(decode_utf16le(buffer[cursor:cursor + prop_length]))
+                values.append(decode_utf16le(buffer[cursor : cursor + prop_length]))
                 cursor += prop_length
             elif prop_type == PROP_BYTES:
                 if prop_length is None:
                     raise ValueError("bytes requires propLength in experimental codec")
-                values.append(buffer[cursor:cursor + prop_length])
+                values.append(buffer[cursor : cursor + prop_length])
                 cursor += prop_length
             elif prop_type == PROP_STRING:
                 if prop_length is None:
                     raise ValueError("string requires propLength in experimental codec")
-                values.append(strip_fixed_string(buffer[cursor:cursor + prop_length]))
+                values.append(strip_fixed_string(buffer[cursor : cursor + prop_length]))
                 cursor += prop_length
             else:
                 raise NotImplementedError(f"unsupported propType={prop_type}")

@@ -52,12 +52,20 @@ websockets library                     — Raw WebSocket I/O
 
 ### Key Modules
 
-- **`client.py`** (~1700 lines) — The public API surface. Contains `MT5WebClient` (async context manager), dataclasses (`TradeResult`, `SymbolInfo`, `AccountInfo`), all trading commands (buy/sell/modify/cancel), data retrieval (ticks, bars, history), and push handler registration (`on_tick()`, `on_trade_update()`, etc.).
-- **`transport.py`** — Manages WebSocket connection, encrypts/decrypts messages via `AESCipher`, dispatches responses to pending command futures (FIFO queue per command ID), handles heartbeat pings and auto-reconnect with exponential backoff.
-- **`protocol.py`** — `SeriesCodec` handles binary field serialization. Field types defined as `PROP_*` constants (i8/i16/i32/i64/u8/u16/u32/u64/f32/f64/str/bytes). Parses variable-length binary packets into dicts.
-- **`schemas.py`** — Defines field layouts for all MT5 command requests/responses (ticks, bars, orders, positions, deals, book entries, corporate links). Each schema is a list of `(field_name, field_type)` tuples.
-- **`constants.py`** — Command IDs (`CMD_*`), order types, trade actions, filling modes, return codes, and period constants.
-- **`crypto.py`** — AES-CBC cipher initialization from obfuscated server key. Used by transport for all post-handshake communication.
+- **`client.py`** (~480 lines) — Core lifecycle: `MT5WebClient` class (async context manager), connect/close/login/logout, heartbeat, auto-reconnect. Assembles functionality via four mixin classes.
+- **`_push_handlers.py`** (~315 lines) — `_PushHandlersMixin`: push notification handler registration and dispatch (`on_tick()`, `on_trade_update()`, `on_book_update()`, etc.), tick/book caching.
+- **`_account.py`** (~470 lines) — `_AccountMixin`: account info, terminal info, version, demo/real account opening, OTP, verification, notifications, corporate links.
+- **`_market_data.py`** (~820 lines) — `_MarketDataMixin`: symbol management, tick/bar data retrieval, order book subscriptions, currency conversion rate resolution, profit/margin calculations.
+- **`_trading.py`** (~1050 lines) — `_TradingMixin`: positions/orders CRUD, trade execution, all order type helpers (buy_market, sell_limit, etc.), order validation.
+- **`_parsers.py`** (~520 lines) — Standalone parsing functions: binary protocol parsing, timestamp coercion, validation helpers.
+- **`_validation.py`** (~35 lines) — Input validation functions: volume, price, symbol name, connection state.
+- **`types.py`** (~295 lines) — Dataclasses (`TradeResult`, `SymbolInfo`, `AccountInfo`, etc.), TypedDicts (`TickRecord`, `BarRecord`, etc.), schemas, type aliases.
+- **`exceptions.py`** (~55 lines) — Exception hierarchy: `PyMT5Error` base, `MT5ConnectionError`, `AuthenticationError`, `TradeError`, `ProtocolError`, `SymbolNotFoundError`, `ValidationError`, `SessionError`, `MT5TimeoutError`.
+- **`transport.py`** — WebSocket lifecycle, encryption, command queue, FIFO dispatch, heartbeat pings.
+- **`protocol.py`** — `SeriesCodec` binary field serialization/deserialization. Field types: `PROP_*` constants.
+- **`schemas.py`** — Field layouts for all MT5 command requests/responses.
+- **`constants.py`** — Command IDs (`CMD_*`), order types, trade actions, filling modes, return codes.
+- **`crypto.py`** — AES-CBC cipher initialization from obfuscated server key.
 - **`helpers.py`** — UTF-16LE encoding, obfuscation routines, string padding, client ID generation.
 
 ### Key Patterns

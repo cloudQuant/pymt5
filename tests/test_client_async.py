@@ -35,6 +35,7 @@ from pymt5.transport import CommandResult
 
 # ---- Login flow ----
 
+
 async def test_login_stores_credentials():
     client = MT5WebClient()
     # Mock transport.send_command for LOGIN
@@ -42,14 +43,10 @@ async def test_login_stores_credentials():
     session_id = (42).to_bytes(8, "little", signed=False)
     login_body = token_bytes + session_id
 
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_LOGIN, code=0, body=login_body
-    ))
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_LOGIN, code=0, body=login_body))
     client.transport.is_ready = True
 
-    token, session = await client.login(
-        login=12345678, password="test", auto_heartbeat=False
-    )
+    token, session = await client.login(login=12345678, password="test", auto_heartbeat=False)
 
     assert client._logged_in is True
     assert client._login_kwargs is not None
@@ -59,11 +56,10 @@ async def test_login_stores_credentials():
 
 # ---- subscribe_ticks ----
 
+
 async def test_subscribe_ticks_accumulates():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_SUBSCRIBE_TICKS, code=0, body=b""
-    ))
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_SUBSCRIBE_TICKS, code=0, body=b""))
     client.transport.is_ready = True
 
     await client.subscribe_ticks([1, 2])
@@ -80,12 +76,11 @@ async def test_subscribe_ticks_accumulates():
 
 # ---- unsubscribe_ticks ----
 
+
 async def test_unsubscribe_ticks_removes():
     client = MT5WebClient()
     client._subscribed_ids = [1, 2, 3]
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_SUBSCRIBE_TICKS, code=0, body=b""
-    ))
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_SUBSCRIBE_TICKS, code=0, body=b""))
     client.transport.is_ready = True
 
     await client.unsubscribe_ticks([2])
@@ -95,9 +90,7 @@ async def test_unsubscribe_ticks_removes():
 async def test_unsubscribe_ticks_all():
     client = MT5WebClient()
     client._subscribed_ids = [1, 2]
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_SUBSCRIBE_TICKS, code=0, body=b""
-    ))
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_SUBSCRIBE_TICKS, code=0, body=b""))
     client.transport.is_ready = True
 
     await client.unsubscribe_ticks([1, 2])
@@ -111,6 +104,7 @@ async def test_unsubscribe_ticks_all():
 
 # ---- on_tick handler ----
 
+
 async def test_on_tick_handler_parses_ticks():
     client = MT5WebClient()
     received = []
@@ -120,17 +114,19 @@ async def test_on_tick_handler_parses_ticks():
     assert callable(handler)
 
     # Build a fake tick
-    tick_data = SeriesCodec.serialize([
-        (PROP_U32, 42),      # symbol_id
-        (PROP_I32, 1000000), # tick_time
-        (PROP_U32, 0),       # fields
-        (PROP_F64, 1.12345), # bid
-        (PROP_F64, 1.12350), # ask
-        (PROP_F64, 0.0),     # last
-        (PROP_I64, 100),     # tick_volume
-        (PROP_U32, 500),     # time_ms_delta
-        (PROP_U16, 0),       # flags
-    ])
+    tick_data = SeriesCodec.serialize(
+        [
+            (PROP_U32, 42),  # symbol_id
+            (PROP_I32, 1000000),  # tick_time
+            (PROP_U32, 0),  # fields
+            (PROP_F64, 1.12345),  # bid
+            (PROP_F64, 1.12350),  # ask
+            (PROP_F64, 0.0),  # last
+            (PROP_I64, 100),  # tick_volume
+            (PROP_U32, 500),  # time_ms_delta
+            (PROP_U16, 0),  # flags
+        ]
+    )
 
     # Simulate tick push
     result = CommandResult(command=CMD_TICK_PUSH, code=0, body=tick_data)
@@ -148,17 +144,19 @@ async def test_symbol_info_tick_uses_internal_cache():
     client = MT5WebClient()
     client._symbols["EURUSD"] = type("S", (), {"name": "EURUSD", "symbol_id": 42, "digits": 5})()
     client._symbols_by_id[42] = client._symbols["EURUSD"]
-    tick_data = SeriesCodec.serialize([
-        (PROP_U32, 42),
-        (PROP_I32, 1000000),
-        (PROP_U32, 0),
-        (PROP_F64, 1.12345),
-        (PROP_F64, 1.12350),
-        (PROP_F64, 0.0),
-        (PROP_I64, 100),
-        (PROP_U32, 500),
-        (PROP_U16, 0),
-    ])
+    tick_data = SeriesCodec.serialize(
+        [
+            (PROP_U32, 42),
+            (PROP_I32, 1000000),
+            (PROP_U32, 0),
+            (PROP_F64, 1.12345),
+            (PROP_F64, 1.12350),
+            (PROP_F64, 0.0),
+            (PROP_I64, 100),
+            (PROP_U32, 500),
+            (PROP_U16, 0),
+        ]
+    )
 
     client._cache_tick_push(CommandResult(command=CMD_TICK_PUSH, code=0, body=tick_data))
     tick = client.symbol_info_tick("EURUSD")
@@ -194,6 +192,7 @@ async def test_on_tick_handler_error_does_not_propagate():
 
 # ---- on_* handler return values (Phase 7.2) ----
 
+
 def test_on_handlers_return_callable():
     client = MT5WebClient()
     handlers = [
@@ -215,6 +214,7 @@ def test_on_handlers_return_callable():
 
 # ---- trade_request validation ----
 
+
 async def test_trade_request_volume_validation():
     client = MT5WebClient()
     client.transport.is_ready = True
@@ -226,12 +226,11 @@ async def test_trade_request_pending_price_validation():
     client = MT5WebClient()
     client.transport.is_ready = True
     with pytest.raises(ValueError, match="price_order must be > 0"):
-        await client.trade_request(
-            trade_action=TRADE_ACTION_PENDING, volume=100, price_order=0.0
-        )
+        await client.trade_request(trade_action=TRADE_ACTION_PENDING, volume=100, price_order=0.0)
 
 
 # ---- _parse_account_response ----
+
 
 def test_parse_account_response_empty():
     assert _parse_account_response(b"") == {}
@@ -243,121 +242,135 @@ def test_parse_account_response_short():
 
 
 def test_parse_account_response_valid():
-    header = SeriesCodec.serialize([
-        (4, 0),                  # account_type
-        (3, 0),                  # rights
-        (3, 16),                 # permissions_flags
-        (8, 10000.0),            # balance
-        (8, 500.0),              # credit
-        (11, "USD", 64),         # account_currency
-        (6, 2),                  # currency_digits
-        (6, 100),                # margin_leverage
-        (11, "Demo Account", 256),
-        (5, 5687),               # server_build
-        (11, "MetaQuotes-Demo", 128),
-        (11, "MetaQuotes Ltd", 256),
-        (3, 3600),               # timezone_shift
-        (1, 1),                  # daylightmode
-        (6, 2),                  # margin_mode
-        (6, 0),                  # margin_free_mode
-        (8, 50.0),               # margin_so_call
-        (8, 30.0),               # margin_so_so
-        (6, 0),                  # margin_so_mode
-        (8, 0.0),                # margin_virtual
-        (6, 0),                  # margin_free_profit_mode
-        (8, 123.45),             # acc_profit
-        (8, 0.0),                # commission_daily
-        (8, 0.0),                # commission_monthly
-        (6, 10),                 # auth_password_min
-        (6, 1),                  # otp_status
-    ])
-    trade_settings = SeriesCodec.serialize([
-        (11, "Forex\\Major\\EURUSD", 256),
-        (3, 12),
-        (3, 0),
-        (6, 4),
-        (3, 20),
-        (3, 10),
-        (6, 2),
-        (6, 7),
-        (6, 15),
-        (6, 127),
-        (6, 3),
-        (6, 30),
-        (6, 1),
-        (6, 7),
-        (6, 2),
-        (6, 3),
-        (18, 1_000_000),
-        (6, 1),
-        (6, 0),
-        (6, 0),
-        (18, 1000),
-        (18, 1000000),
-        (18, 1000),
-        (18, 0),
-        (6, 0),
-        (8, 1000.0),
-        (8, 900.0),
-        (12, struct.pack("<8d", 1.0, 1.1, 1.2, 1.3, 0.0, 0.0, 0.0, 0.0), 64),
-        (12, struct.pack("<8d", 2.0, 2.1, 2.2, 2.3, 0.0, 0.0, 0.0, 0.0), 64),
-        (8, 0.5),
-        (8, 250.0),
-        (8, 1.0),
-        (6, 0),
-        (8, -3.2),
-        (8, 1.4),
-        (3, 3),
-        (6, 16),
-        (6, 10),
-        (12, struct.pack("<7d", 0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 0.0), 56),
-    ])
-    leverage_rule = SeriesCodec.serialize([
-        (11, "Forex\\Major\\*", 256),
-        (6, 1),
-        (11, "USD", 32),
-        (6, 2),
-        (3, 1),
-    ])
-    leverage_tier = SeriesCodec.serialize([
-        (8, 0.0),
-        (8, 100000.0),
-        (8, 1.0),
-        (8, 0.5),
-    ])
-    commission = SeriesCodec.serialize([
-        (11, "Forex\\Major\\*", 256),
-        (6, 1),
-        (6, 2),
-        (6, 3),
-        (11, "USD", 32),
-        (6, 4),
-    ])
-    commission_tier = SeriesCodec.serialize([
-        (6, 1),
-        (6, 2),
-        (8, 7.0),
-        (8, 0.0),
-        (8, 1000000.0),
-        (8, 0.0),
-        (8, 1000.0),
-        (11, "USD", 32),
-    ])
-    body = b"".join([
-        header,
-        struct.pack("<I", 1),
-        trade_settings,
-        struct.pack("<i", 7),
-        struct.pack("<i", 6104),
-        struct.pack("<Q", 9),
-        struct.pack("<i", 1),
-        leverage_rule,
-        leverage_tier,
-        struct.pack("<I", 1),
-        commission,
-        struct.pack("<I", 1),
-        commission_tier,
-    ])
+    header = SeriesCodec.serialize(
+        [
+            (4, 0),  # account_type
+            (3, 0),  # rights
+            (3, 16),  # permissions_flags
+            (8, 10000.0),  # balance
+            (8, 500.0),  # credit
+            (11, "USD", 64),  # account_currency
+            (6, 2),  # currency_digits
+            (6, 100),  # margin_leverage
+            (11, "Demo Account", 256),
+            (5, 5687),  # server_build
+            (11, "MetaQuotes-Demo", 128),
+            (11, "MetaQuotes Ltd", 256),
+            (3, 3600),  # timezone_shift
+            (1, 1),  # daylightmode
+            (6, 2),  # margin_mode
+            (6, 0),  # margin_free_mode
+            (8, 50.0),  # margin_so_call
+            (8, 30.0),  # margin_so_so
+            (6, 0),  # margin_so_mode
+            (8, 0.0),  # margin_virtual
+            (6, 0),  # margin_free_profit_mode
+            (8, 123.45),  # acc_profit
+            (8, 0.0),  # commission_daily
+            (8, 0.0),  # commission_monthly
+            (6, 10),  # auth_password_min
+            (6, 1),  # otp_status
+        ]
+    )
+    trade_settings = SeriesCodec.serialize(
+        [
+            (11, "Forex\\Major\\EURUSD", 256),
+            (3, 12),
+            (3, 0),
+            (6, 4),
+            (3, 20),
+            (3, 10),
+            (6, 2),
+            (6, 7),
+            (6, 15),
+            (6, 127),
+            (6, 3),
+            (6, 30),
+            (6, 1),
+            (6, 7),
+            (6, 2),
+            (6, 3),
+            (18, 1_000_000),
+            (6, 1),
+            (6, 0),
+            (6, 0),
+            (18, 1000),
+            (18, 1000000),
+            (18, 1000),
+            (18, 0),
+            (6, 0),
+            (8, 1000.0),
+            (8, 900.0),
+            (12, struct.pack("<8d", 1.0, 1.1, 1.2, 1.3, 0.0, 0.0, 0.0, 0.0), 64),
+            (12, struct.pack("<8d", 2.0, 2.1, 2.2, 2.3, 0.0, 0.0, 0.0, 0.0), 64),
+            (8, 0.5),
+            (8, 250.0),
+            (8, 1.0),
+            (6, 0),
+            (8, -3.2),
+            (8, 1.4),
+            (3, 3),
+            (6, 16),
+            (6, 10),
+            (12, struct.pack("<7d", 0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 0.0), 56),
+        ]
+    )
+    leverage_rule = SeriesCodec.serialize(
+        [
+            (11, "Forex\\Major\\*", 256),
+            (6, 1),
+            (11, "USD", 32),
+            (6, 2),
+            (3, 1),
+        ]
+    )
+    leverage_tier = SeriesCodec.serialize(
+        [
+            (8, 0.0),
+            (8, 100000.0),
+            (8, 1.0),
+            (8, 0.5),
+        ]
+    )
+    commission = SeriesCodec.serialize(
+        [
+            (11, "Forex\\Major\\*", 256),
+            (6, 1),
+            (6, 2),
+            (6, 3),
+            (11, "USD", 32),
+            (6, 4),
+        ]
+    )
+    commission_tier = SeriesCodec.serialize(
+        [
+            (6, 1),
+            (6, 2),
+            (8, 7.0),
+            (8, 0.0),
+            (8, 1000000.0),
+            (8, 0.0),
+            (8, 1000.0),
+            (11, "USD", 32),
+        ]
+    )
+    body = b"".join(
+        [
+            header,
+            struct.pack("<I", 1),
+            trade_settings,
+            struct.pack("<i", 7),
+            struct.pack("<i", 6104),
+            struct.pack("<Q", 9),
+            struct.pack("<i", 1),
+            leverage_rule,
+            leverage_tier,
+            struct.pack("<I", 1),
+            commission,
+            struct.pack("<I", 1),
+            commission_tier,
+        ]
+    )
     result = _parse_account_response(body)
     assert result["balance"] == 10000.0
     assert result["credit"] == 500.0
@@ -394,11 +407,10 @@ def test_parse_account_response_valid():
 
 # ---- subscribe_book tracks IDs ----
 
+
 async def test_subscribe_book_stores_ids():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_SUBSCRIBE_BOOK, code=0, body=b""
-    ))
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_SUBSCRIBE_BOOK, code=0, body=b""))
     client.transport.is_ready = True
 
     await client.subscribe_book([10, 20, 30])
@@ -409,9 +421,7 @@ async def test_subscribe_book_stores_ids():
 
 async def test_subscribe_book_accumulates():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_SUBSCRIBE_BOOK, code=0, body=b""
-    ))
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_SUBSCRIBE_BOOK, code=0, body=b""))
     client.transport.is_ready = True
 
     await client.subscribe_book([10, 20])
@@ -425,9 +435,7 @@ async def test_subscribe_book_accumulates():
 async def test_unsubscribe_book_removes():
     client = MT5WebClient()
     client._subscribed_book_ids = [10, 20, 30]
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_SUBSCRIBE_BOOK, code=0, body=b""
-    ))
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_SUBSCRIBE_BOOK, code=0, body=b""))
     client.transport.is_ready = True
 
     await client.unsubscribe_book([20])
@@ -438,11 +446,13 @@ async def test_unsubscribe_book_removes():
 
 async def test_symbols_get_group_filter():
     client = MT5WebClient()
-    client.get_symbols = AsyncMock(return_value=[
-        {"trade_symbol": "EURUSD"},
-        {"trade_symbol": "USDJPY"},
-        {"trade_symbol": "XAUUSD"},
-    ])
+    client.get_symbols = AsyncMock(
+        return_value=[
+            {"trade_symbol": "EURUSD"},
+            {"trade_symbol": "USDJPY"},
+            {"trade_symbol": "XAUUSD"},
+        ]
+    )
 
     filtered = await client.symbols_get("*USD*,!*JPY*")
     assert [item["trade_symbol"] for item in filtered] == ["EURUSD", "XAUUSD"]
@@ -450,10 +460,12 @@ async def test_symbols_get_group_filter():
 
 async def test_positions_get_ticket_filter():
     client = MT5WebClient()
-    client.get_positions = AsyncMock(return_value=[
-        {"position_id": 1, "trade_symbol": "EURUSD"},
-        {"position_id": 2, "trade_symbol": "GBPUSD"},
-    ])
+    client.get_positions = AsyncMock(
+        return_value=[
+            {"position_id": 1, "trade_symbol": "EURUSD"},
+            {"position_id": 2, "trade_symbol": "GBPUSD"},
+        ]
+    )
 
     result = await client.positions_get(ticket=2)
     assert result == [{"position_id": 2, "trade_symbol": "GBPUSD"}]
@@ -461,11 +473,13 @@ async def test_positions_get_ticket_filter():
 
 async def test_history_deals_get_group_and_ticket_filters():
     client = MT5WebClient()
-    client.get_deals = AsyncMock(return_value=[
-        {"trade_order": 1, "position_id": 11, "trade_symbol": "EURUSD"},
-        {"trade_order": 2, "position_id": 22, "trade_symbol": "USDJPY"},
-        {"trade_order": 2, "position_id": 33, "trade_symbol": "XAUUSD"},
-    ])
+    client.get_deals = AsyncMock(
+        return_value=[
+            {"trade_order": 1, "position_id": 11, "trade_symbol": "EURUSD"},
+            {"trade_order": 2, "position_id": 22, "trade_symbol": "USDJPY"},
+            {"trade_order": 2, "position_id": 33, "trade_symbol": "XAUUSD"},
+        ]
+    )
 
     result = await client.history_deals_get(group="*USD*,!*JPY*", ticket=2)
     assert result == [{"trade_order": 2, "position_id": 33, "trade_symbol": "XAUUSD"}]
@@ -498,101 +512,105 @@ async def test_copy_rates_wrappers():
 
 async def test_get_full_symbol_info_parses_extended_bond_fields():
     client = MT5WebClient()
-    trade = SeriesCodec.serialize([
-        (11, "Bonds\\MOEX\\OFZ26238", 256),
-        (3, 0),
-        (3, 0),
-        (6, 4),
-        (3, 0),
-        (3, 0),
-        (6, 2),
-        (6, 7),
-        (6, 15),
-        (6, 127),
-        (6, 3),
-        (6, 30),
-        (6, 1),
-        (6, 7),
-        (6, 2),
-        (6, 3),
-        (18, 1_000_000),
-        (6, 1),
-        (6, 0),
-        (6, 0),
-        (18, 1),
-        (18, 1000),
-        (18, 1),
-        (18, 0),
-        (6, 0),
-        (8, 980.0),
-        (8, 970.0),
-        (12, struct.pack("<8d", *([0.0] * 8)), 64),
-        (12, struct.pack("<8d", *([0.0] * 8)), 64),
-        (8, 0.0),
-        (8, 0.0),
-        (8, 1.0),
-        (6, 0),
-        (8, 0.0),
-        (8, 0.0),
-        (3, 0),
-        (6, 0),
-        (6, 0),
-        (12, struct.pack("<7d", *([0.0] * 7)), 56),
-    ])
+    trade = SeriesCodec.serialize(
+        [
+            (11, "Bonds\\MOEX\\OFZ26238", 256),
+            (3, 0),
+            (3, 0),
+            (6, 4),
+            (3, 0),
+            (3, 0),
+            (6, 2),
+            (6, 7),
+            (6, 15),
+            (6, 127),
+            (6, 3),
+            (6, 30),
+            (6, 1),
+            (6, 7),
+            (6, 2),
+            (6, 3),
+            (18, 1_000_000),
+            (6, 1),
+            (6, 0),
+            (6, 0),
+            (18, 1),
+            (18, 1000),
+            (18, 1),
+            (18, 0),
+            (6, 0),
+            (8, 980.0),
+            (8, 970.0),
+            (12, struct.pack("<8d", *([0.0] * 8)), 64),
+            (12, struct.pack("<8d", *([0.0] * 8)), 64),
+            (8, 0.0),
+            (8, 0.0),
+            (8, 1.0),
+            (6, 0),
+            (8, 0.0),
+            (8, 0.0),
+            (3, 0),
+            (6, 0),
+            (6, 0),
+            (12, struct.pack("<7d", *([0.0] * 7)), 56),
+        ]
+    )
     schedule = bytearray(896)
     struct.pack_into("<HH", schedule, 0, 10, 20)
     subscription = struct.pack("<IBBH", 3, 1, 2, 0)
-    record = SeriesCodec.serialize([
-        (11, "OFZ26238", 64),
-        (11, "RU000A1038V6", 32),
-        (11, "OFZ Bond", 128),
-        (11, "INTL", 128),
-        (11, "RUB", 64),
-        (11, "MOEX", 64),
-        (11, "https://example.com/bond", 512),
-        (11, "Bonds", 128),
-        (11, "MOEX", 128),
-        (11, "DBFNXX", 16),
-        (5, 12),
-        (5, 34),
-        (11, "RU", 8),
-        (11, "RUB", 32),
-        (11, "RUB", 32),
-        (11, "RUB", 32),
-        (6, 2),
-        (6, 2),
-        (6, 2),
-        (6, 0),
-        (6, 0),
-        (6, 2),
-        (8, 0.01),
-        (8, 1.0),
-        (6, 1234),
-        (6, 1),
-        (6, 10),
-        (6, 0),
-        (6, 7),
-        (3, 5),
-        (3, 0),
-        (8, 1.0),
-        (8, 0.01),
-        (8, 1.0),
-        (6, 0),
-        (6, 37),
-        (8, 98.0),
-        (8, 0.0),
-        (8, 0.0),
-        (8, 0.0),
-        (6, 0),
-        (8, 1000.0),
-        (8, 12.5),
-        (6, 0),
-        (3, 0),
-        (3, 0),
-        (12, trade, 628),
-        (12, bytes(schedule), 896),
-        (12, subscription, 8),
-    ])
+    record = SeriesCodec.serialize(
+        [
+            (11, "OFZ26238", 64),
+            (11, "RU000A1038V6", 32),
+            (11, "OFZ Bond", 128),
+            (11, "INTL", 128),
+            (11, "RUB", 64),
+            (11, "MOEX", 64),
+            (11, "https://example.com/bond", 512),
+            (11, "Bonds", 128),
+            (11, "MOEX", 128),
+            (11, "DBFNXX", 16),
+            (5, 12),
+            (5, 34),
+            (11, "RU", 8),
+            (11, "RUB", 32),
+            (11, "RUB", 32),
+            (11, "RUB", 32),
+            (6, 2),
+            (6, 2),
+            (6, 2),
+            (6, 0),
+            (6, 0),
+            (6, 2),
+            (8, 0.01),
+            (8, 1.0),
+            (6, 1234),
+            (6, 1),
+            (6, 10),
+            (6, 0),
+            (6, 7),
+            (3, 5),
+            (3, 0),
+            (8, 1.0),
+            (8, 0.01),
+            (8, 1.0),
+            (6, 0),
+            (6, 37),
+            (8, 98.0),
+            (8, 0.0),
+            (8, 0.0),
+            (8, 0.0),
+            (6, 0),
+            (8, 1000.0),
+            (8, 12.5),
+            (6, 0),
+            (3, 0),
+            (3, 0),
+            (12, trade, 628),
+            (12, bytes(schedule), 896),
+            (12, subscription, 8),
+        ]
+    )
     body = struct.pack("<I", 1) + record
     client.transport.send_command = AsyncMock(return_value=CommandResult(command=18, code=0, body=body))
 
@@ -617,16 +635,18 @@ async def test_order_send_maps_stop_limit_request():
     )()
     client.trade_request = AsyncMock(return_value="ok")
 
-    result = await client.order_send({
-        "action": TRADE_ACTION_PENDING,
-        "symbol": "EURUSD",
-        "volume": 0.1,
-        "type": ORDER_TYPE_BUY_STOP_LIMIT,
-        "price": 1.1050,
-        "stoplimit": 1.1040,
-        "sl": 1.1,
-        "tp": 1.11,
-    })
+    result = await client.order_send(
+        {
+            "action": TRADE_ACTION_PENDING,
+            "symbol": "EURUSD",
+            "volume": 0.1,
+            "type": ORDER_TYPE_BUY_STOP_LIMIT,
+            "price": 1.1050,
+            "stoplimit": 1.1040,
+            "sl": 1.1,
+            "tp": 1.11,
+        }
+    )
 
     assert result == "ok"
     client.trade_request.assert_awaited_once_with(
@@ -655,12 +675,14 @@ async def test_order_send_maps_stop_limit_request():
 
 async def test_order_calc_profit_forex_quote_currency_account():
     client = MT5WebClient()
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "EURUSD",
-        "trade_calc_mode": 0,
-        "contract_size": 100000.0,
-        "currency_profit": "USD",
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "EURUSD",
+            "trade_calc_mode": 0,
+            "contract_size": 100000.0,
+            "currency_profit": "USD",
+        }
+    )
     client.get_account = AsyncMock(return_value={"currency": "USD", "leverage": 100})
 
     profit = await client.order_calc_profit(ORDER_TYPE_BUY, "EURUSD", 0.1, 1.1000, 1.1050)
@@ -673,12 +695,14 @@ async def test_order_calc_profit_cross_currency_uses_inverse_pair_tick():
     client = MT5WebClient()
     client._symbols["EURUSD"] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)
     client._tick_cache_by_name["EURUSD"] = {"bid": 1.1000, "ask": 1.1002}
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "EURUSD",
-        "trade_calc_mode": 0,
-        "contract_size": 100000.0,
-        "currency_profit": "USD",
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "EURUSD",
+            "trade_calc_mode": 0,
+            "contract_size": 100000.0,
+            "currency_profit": "USD",
+        }
+    )
     client.get_account = AsyncMock(return_value={"currency": "EUR", "leverage": 100})
 
     profit = await client.order_calc_profit(ORDER_TYPE_BUY, "EURUSD", 0.1, 1.1000, 1.1010)
@@ -689,14 +713,16 @@ async def test_order_calc_profit_cross_currency_uses_inverse_pair_tick():
 
 async def test_order_calc_profit_unsupported_bond_mode_sets_last_error():
     client = MT5WebClient()
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "MOEXBOND",
-        "trade_calc_mode": 37,
-        "contract_size": 1.0,
-        "face_value": 1000.0,
-        "accrued_interest": 12.5,
-        "currency_profit": "RUB",
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "MOEXBOND",
+            "trade_calc_mode": 37,
+            "contract_size": 1.0,
+            "face_value": 1000.0,
+            "accrued_interest": 12.5,
+            "currency_profit": "RUB",
+        }
+    )
     client.get_account = AsyncMock(return_value={"currency": "RUB", "leverage": 100})
 
     profit = await client.order_calc_profit(ORDER_TYPE_BUY, "MOEXBOND", 1.0, 98.0, 99.0)
@@ -707,12 +733,14 @@ async def test_order_calc_profit_unsupported_bond_mode_sets_last_error():
 
 async def test_order_calc_margin_forex_uses_account_leverage():
     client = MT5WebClient()
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "EURUSD",
-        "trade_calc_mode": 0,
-        "contract_size": 100000.0,
-        "currency_margin": "EUR",
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "EURUSD",
+            "trade_calc_mode": 0,
+            "contract_size": 100000.0,
+            "currency_margin": "EUR",
+        }
+    )
     client.get_account = AsyncMock(return_value={"currency": "EUR", "leverage": 100})
 
     margin = await client.order_calc_margin(ORDER_TYPE_BUY, "EURUSD", 0.1, 1.1000)
@@ -725,12 +753,14 @@ async def test_order_calc_margin_cfd_leverage_converts_currency():
     client = MT5WebClient()
     client._symbols["EURUSD"] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)
     client._tick_cache_by_name["EURUSD"] = {"bid": 1.1000, "ask": 1.1002}
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "XAUUSD",
-        "trade_calc_mode": 4,
-        "contract_size": 100.0,
-        "currency_margin": "USD",
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "XAUUSD",
+            "trade_calc_mode": 4,
+            "contract_size": 100.0,
+            "currency_margin": "USD",
+        }
+    )
     client.get_account = AsyncMock(return_value={"currency": "EUR", "leverage": 50})
 
     margin = await client.order_calc_margin(ORDER_TYPE_BUY, "XAUUSD", 0.1, 2000.0)
@@ -741,13 +771,15 @@ async def test_order_calc_margin_cfd_leverage_converts_currency():
 
 async def test_order_calc_margin_bond_uses_face_value_formula():
     client = MT5WebClient()
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "MOEXBOND",
-        "trade_calc_mode": 37,
-        "contract_size": 1.0,
-        "face_value": 1000.0,
-        "currency_margin": "RUB",
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "MOEXBOND",
+            "trade_calc_mode": 37,
+            "contract_size": 1.0,
+            "face_value": 1000.0,
+            "currency_margin": "RUB",
+        }
+    )
     client.get_account = AsyncMock(return_value={"currency": "RUB", "leverage": 100})
 
     margin = await client.order_calc_margin(ORDER_TYPE_BUY, "MOEXBOND", 1.0, 98.0)
@@ -759,41 +791,49 @@ async def test_order_calc_margin_bond_uses_face_value_formula():
 async def test_copy_ticks_wrappers_use_cached_history():
     client = MT5WebClient()
     client._symbols["EURUSD"] = client._symbols_by_id[1] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)
-    body = b"".join([
-        SeriesCodec.serialize([
-            (6, 1),
-            (3, 1000),
-            (6, 0),
-            (8, 1.1000),
-            (8, 1.1002),
-            (8, 0.0),
-            (17, 0),
-            (6, 100),
-            (5, 2),
-        ]),
-        SeriesCodec.serialize([
-            (6, 1),
-            (3, 1001),
-            (6, 0),
-            (8, 0.0),
-            (8, 0.0),
-            (8, 1.1001),
-            (17, 5),
-            (6, 200),
-            (5, 4),
-        ]),
-        SeriesCodec.serialize([
-            (6, 1),
-            (3, 1002),
-            (6, 0),
-            (8, 1.1003),
-            (8, 1.1005),
-            (8, 1.1004),
-            (17, 7),
-            (6, 300),
-            (5, 6),
-        ]),
-    ])
+    body = b"".join(
+        [
+            SeriesCodec.serialize(
+                [
+                    (6, 1),
+                    (3, 1000),
+                    (6, 0),
+                    (8, 1.1000),
+                    (8, 1.1002),
+                    (8, 0.0),
+                    (17, 0),
+                    (6, 100),
+                    (5, 2),
+                ]
+            ),
+            SeriesCodec.serialize(
+                [
+                    (6, 1),
+                    (3, 1001),
+                    (6, 0),
+                    (8, 0.0),
+                    (8, 0.0),
+                    (8, 1.1001),
+                    (17, 5),
+                    (6, 200),
+                    (5, 4),
+                ]
+            ),
+            SeriesCodec.serialize(
+                [
+                    (6, 1),
+                    (3, 1002),
+                    (6, 0),
+                    (8, 1.1003),
+                    (8, 1.1005),
+                    (8, 1.1004),
+                    (17, 7),
+                    (6, 300),
+                    (5, 6),
+                ]
+            ),
+        ]
+    )
     client._cache_tick_push(CommandResult(command=CMD_TICK_PUSH, code=0, body=body))
 
     ticks_from = await client.copy_ticks_from("EURUSD", 1001, 2, COPY_TICKS_ALL)
@@ -808,33 +848,39 @@ async def test_copy_ticks_wrappers_use_cached_history():
 
 async def test_order_check_success_uses_local_margin_estimate():
     client = MT5WebClient()
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "EURUSD",
-        "trade_mode": 4,
-        "volume_min": 0.01,
-        "volume_max": 100.0,
-        "volume_step": 0.01,
-        "point": 0.0001,
-        "trade_stops_level": 10,
-        "filling_mode": 7,
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "EURUSD",
+            "trade_mode": 4,
+            "volume_min": 0.01,
+            "volume_max": 100.0,
+            "volume_step": 0.01,
+            "point": 0.0001,
+            "trade_stops_level": 10,
+            "filling_mode": 7,
+        }
+    )
     client.order_calc_margin = AsyncMock(return_value=100.0)
-    client.get_account = AsyncMock(return_value={
-        "balance": 1000.0,
-        "equity": 1000.0,
-        "profit": 0.0,
-        "margin": 50.0,
-    })
+    client.get_account = AsyncMock(
+        return_value={
+            "balance": 1000.0,
+            "equity": 1000.0,
+            "profit": 0.0,
+            "margin": 50.0,
+        }
+    )
 
-    result = await client.order_check({
-        "action": TRADE_ACTION_PENDING,
-        "symbol": "EURUSD",
-        "volume": 0.10,
-        "type": ORDER_TYPE_BUY_LIMIT,
-        "price": 1.1000,
-        "sl": 1.0900,
-        "tp": 1.1100,
-    })
+    result = await client.order_check(
+        {
+            "action": TRADE_ACTION_PENDING,
+            "symbol": "EURUSD",
+            "volume": 0.10,
+            "type": ORDER_TYPE_BUY_LIMIT,
+            "price": 1.1000,
+            "sl": 1.0900,
+            "tp": 1.1100,
+        }
+    )
 
     assert result["retcode"] == 0
     assert result["margin"] == pytest.approx(150.0)
@@ -844,30 +890,36 @@ async def test_order_check_success_uses_local_margin_estimate():
 
 async def test_order_check_invalid_volume():
     client = MT5WebClient()
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "EURUSD",
-        "trade_mode": 4,
-        "volume_min": 0.01,
-        "volume_max": 100.0,
-        "volume_step": 0.01,
-        "point": 0.0001,
-        "trade_stops_level": 0,
-        "filling_mode": 7,
-    })
-    client.get_account = AsyncMock(return_value={
-        "balance": 1000.0,
-        "equity": 1000.0,
-        "profit": 0.0,
-        "margin": 50.0,
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "EURUSD",
+            "trade_mode": 4,
+            "volume_min": 0.01,
+            "volume_max": 100.0,
+            "volume_step": 0.01,
+            "point": 0.0001,
+            "trade_stops_level": 0,
+            "filling_mode": 7,
+        }
+    )
+    client.get_account = AsyncMock(
+        return_value={
+            "balance": 1000.0,
+            "equity": 1000.0,
+            "profit": 0.0,
+            "margin": 50.0,
+        }
+    )
 
-    result = await client.order_check({
-        "action": TRADE_ACTION_PENDING,
-        "symbol": "EURUSD",
-        "volume": 0.005,
-        "type": ORDER_TYPE_BUY_LIMIT,
-        "price": 1.1000,
-    })
+    result = await client.order_check(
+        {
+            "action": TRADE_ACTION_PENDING,
+            "symbol": "EURUSD",
+            "volume": 0.005,
+            "type": ORDER_TYPE_BUY_LIMIT,
+            "price": 1.1000,
+        }
+    )
 
     assert result["retcode"] == TRADE_RETCODE_INVALID_VOLUME
     assert "minimum" in result["comment"]
@@ -875,33 +927,39 @@ async def test_order_check_invalid_volume():
 
 async def test_order_check_no_money():
     client = MT5WebClient()
-    client.symbol_info = AsyncMock(return_value={
-        "trade_symbol": "EURUSD",
-        "trade_mode": 4,
-        "volume_min": 0.01,
-        "volume_max": 100.0,
-        "volume_step": 0.01,
-        "point": 0.0001,
-        "trade_stops_level": 0,
-        "filling_mode": 7,
-    })
+    client.symbol_info = AsyncMock(
+        return_value={
+            "trade_symbol": "EURUSD",
+            "trade_mode": 4,
+            "volume_min": 0.01,
+            "volume_max": 100.0,
+            "volume_step": 0.01,
+            "point": 0.0001,
+            "trade_stops_level": 0,
+            "filling_mode": 7,
+        }
+    )
     client.order_calc_margin = AsyncMock(return_value=950.0)
-    client.get_account = AsyncMock(return_value={
-        "balance": 1000.0,
-        "equity": 1000.0,
-        "profit": 0.0,
-        "margin": 100.0,
-    })
+    client.get_account = AsyncMock(
+        return_value={
+            "balance": 1000.0,
+            "equity": 1000.0,
+            "profit": 0.0,
+            "margin": 100.0,
+        }
+    )
 
-    result = await client.order_check({
-        "action": TRADE_ACTION_PENDING,
-        "symbol": "EURUSD",
-        "volume": 0.10,
-        "type": ORDER_TYPE_BUY_LIMIT,
-        "price": 1.1000,
-        "type_time": ORDER_TIME_SPECIFIED,
-        "expiration": 1_700_000_000,
-    })
+    result = await client.order_check(
+        {
+            "action": TRADE_ACTION_PENDING,
+            "symbol": "EURUSD",
+            "volume": 0.10,
+            "type": ORDER_TYPE_BUY_LIMIT,
+            "price": 1.1000,
+            "type_time": ORDER_TIME_SPECIFIED,
+            "expiration": 1_700_000_000,
+        }
+    )
 
     assert result["retcode"] == TRADE_RETCODE_NO_MONEY
     assert result["margin_free"] == pytest.approx(-50.0)
@@ -910,15 +968,17 @@ async def test_order_check_no_money():
 async def test_terminal_info_uses_account_config_fields():
     client = MT5WebClient()
     client.transport.is_ready = True
-    client.get_account = AsyncMock(return_value={
-        "server_build": 5687,
-        "company": "MetaQuotes Ltd",
-        "server_name": "MetaQuotes-Demo",
-        "trade_allowed": True,
-        "is_read_only": False,
-        "timezone_shift": 3600,
-        "server_offset_time": 7200,
-    })
+    client.get_account = AsyncMock(
+        return_value={
+            "server_build": 5687,
+            "company": "MetaQuotes Ltd",
+            "server_name": "MetaQuotes-Demo",
+            "trade_allowed": True,
+            "is_read_only": False,
+            "timezone_shift": 3600,
+            "server_offset_time": 7200,
+        }
+    )
 
     info = await client.terminal_info()
 
@@ -960,6 +1020,7 @@ async def test_version_missing_build_sets_last_error():
 
 # ---- reconnect guard ----
 
+
 def test_reconnect_guard_skips_if_in_progress():
     client = MT5WebClient(auto_reconnect=True)
     client._login_kwargs = {"login": 1, "password": "x"}
@@ -967,7 +1028,9 @@ def test_reconnect_guard_skips_if_in_progress():
     # Create a fake task that is not done
     loop = asyncio.new_event_loop()
 
-    async def dummy(): await asyncio.sleep(999)
+    async def dummy():
+        await asyncio.sleep(999)
+
     client._reconnect_task = loop.create_task(dummy())
 
     # _handle_disconnect should not create a new task

@@ -126,10 +126,11 @@ def test_login_payload_password_is_utf16le():
     pw_field = payload[4:68]
     assert pw_field[0:2] == b"A\x00"  # 'A' in UTF-16LE
     assert pw_field[2:4] == b"B\x00"  # 'B' in UTF-16LE
-    assert pw_field[4:] == bytes(60)   # rest is zero-padded
+    assert pw_field[4:] == bytes(60)  # rest is zero-padded
 
 
 # ---- Schema size tests ----
+
 
 def test_symbol_basic_schema_size():
     # JS: Bh = [FS64, FS128, U32, U32, FS256, U32, FS64, U16]
@@ -139,13 +140,13 @@ def test_symbol_basic_schema_size():
 
 def test_position_schema_size():
     # mu: [I64, I64, U32, U32, FS64, U32, F64*4, U64, F64*5, I64, I64, FS64, F64, U32*3, FS64, I32, I32]
-    expected = 8 + 8 + 4 + 4 + 64 + 4 + 8*4 + 8 + 8*5 + 8 + 8 + 64 + 8 + 4*3 + 64 + 4 + 4
+    expected = 8 + 8 + 4 + 4 + 64 + 4 + 8 * 4 + 8 + 8 * 5 + 8 + 8 + 64 + 8 + 4 * 3 + 64 + 4 + 4
     assert get_series_size(POSITION_SCHEMA) == expected
 
 
 def test_order_schema_size():
     # Ld: [I64, FS64, FS64, U32*7, F64*5, I64*2, U32, I64*2, FS64, F64, U32*2, F64*3, U32, I32*2]
-    expected = (8 + 64 + 64 + 4*7 + 8*5 + 8*2 + 4 + 8*2 + 64 + 8 + 4*2 + 8*3 + 4 + 4*2)
+    expected = 8 + 64 + 64 + 4 * 7 + 8 * 5 + 8 * 2 + 4 + 8 * 2 + 64 + 8 + 4 * 2 + 8 * 3 + 4 + 4 * 2
     assert get_series_size(ORDER_SCHEMA) == expected
 
 
@@ -157,17 +158,19 @@ def test_tick_schema_size():
 
 # ---- Roundtrip serialize/parse tests ----
 
+
 def test_symbol_basic_roundtrip():
     from pymt5.constants import PROP_FIXED_STRING, PROP_U16, PROP_U32
+
     fields = [
         (PROP_FIXED_STRING, "EURUSD", 64),
         (PROP_FIXED_STRING, "Forex\\Major", 128),
-        (PROP_U32, 5),       # digits
-        (PROP_U32, 42),      # symbol_id
+        (PROP_U32, 5),  # digits
+        (PROP_U32, 42),  # symbol_id
         (PROP_FIXED_STRING, "Euro vs US Dollar", 256),
-        (PROP_U32, 0),       # trade_calc_mode
+        (PROP_U32, 0),  # trade_calc_mode
         (PROP_FIXED_STRING, "USD", 64),
-        (PROP_U16, 1),       # sector
+        (PROP_U16, 1),  # sector
     ]
     data = SeriesCodec.serialize(fields)
     assert len(data) == 526
@@ -179,16 +182,19 @@ def test_symbol_basic_roundtrip():
 
 def test_parse_counted_records():
     from pymt5.constants import PROP_FIXED_STRING, PROP_U16, PROP_U32
-    rec = SeriesCodec.serialize([
-        (PROP_FIXED_STRING, "GBPUSD", 64),
-        (PROP_FIXED_STRING, "", 128),
-        (PROP_U32, 5),
-        (PROP_U32, 99),
-        (PROP_FIXED_STRING, "", 256),
-        (PROP_U32, 0),
-        (PROP_FIXED_STRING, "USD", 64),
-        (PROP_U16, 0),
-    ])
+
+    rec = SeriesCodec.serialize(
+        [
+            (PROP_FIXED_STRING, "GBPUSD", 64),
+            (PROP_FIXED_STRING, "", 128),
+            (PROP_U32, 5),
+            (PROP_U32, 99),
+            (PROP_FIXED_STRING, "", 256),
+            (PROP_U32, 0),
+            (PROP_FIXED_STRING, "USD", 64),
+            (PROP_U16, 0),
+        ]
+    )
     body = struct.pack("<I", 1) + rec
     records = _parse_counted_records(body, SYMBOL_BASIC_SCHEMA, SYMBOL_BASIC_FIELD_NAMES)
     assert len(records) == 1
@@ -204,16 +210,19 @@ def test_parse_counted_records_empty():
 
 def test_zlib_symbols_decompression():
     from pymt5.constants import PROP_FIXED_STRING, PROP_U16, PROP_U32
-    rec = SeriesCodec.serialize([
-        (PROP_FIXED_STRING, "USDJPY", 64),
-        (PROP_FIXED_STRING, "", 128),
-        (PROP_U32, 3),
-        (PROP_U32, 7),
-        (PROP_FIXED_STRING, "", 256),
-        (PROP_U32, 0),
-        (PROP_FIXED_STRING, "JPY", 64),
-        (PROP_U16, 0),
-    ])
+
+    rec = SeriesCodec.serialize(
+        [
+            (PROP_FIXED_STRING, "USDJPY", 64),
+            (PROP_FIXED_STRING, "", 128),
+            (PROP_U32, 3),
+            (PROP_U32, 7),
+            (PROP_FIXED_STRING, "", 256),
+            (PROP_U32, 0),
+            (PROP_FIXED_STRING, "JPY", 64),
+            (PROP_U16, 0),
+        ]
+    )
     raw_data = struct.pack("<I", 1) + rec
     compressed = zlib.compress(raw_data)
     # Simulate cmd=34 response body: [4 bytes header] + compressed
@@ -227,6 +236,7 @@ def test_zlib_symbols_decompression():
 
 
 # ---- Rate bar tests ----
+
 
 def test_rate_bar_schema_size():
     # I32 + F64*4 + I64 + I32 = 4 + 32 + 8 + 4 = 48
@@ -259,16 +269,19 @@ def test_parse_rate_bars_empty():
 
 def test_deal_schema_size():
     # Pd: I64 + FS64 + I64 + U32*2 + FS64 + U32*2 + F64*4 + U64 + F64*5 + I64*2 + FS64 + F64 + U32*3 + I32*2 + F64
-    expected = (8 + 64 + 8 + 4*2 + 64 + 4*2 + 8*4 + 8 + 8*5 + 8*2 + 64 + 8 + 4*3 + 4*2 + 8)
+    expected = 8 + 64 + 8 + 4 * 2 + 64 + 4 * 2 + 8 * 4 + 8 + 8 * 5 + 8 * 2 + 64 + 8 + 4 * 3 + 4 * 2 + 8
     assert get_series_size(DEAL_SCHEMA) == expected
 
 
 # ---- Error path tests (Phase 4.3) ----
 
+
 def test_unpack_outer_short_frame():
     import pytest
+
     with pytest.raises(ValueError, match="frame too short"):
         from pymt5.protocol import unpack_outer
+
         unpack_outer(b"\x00\x01\x02")  # less than 8 bytes
 
 
@@ -276,6 +289,7 @@ def test_unpack_outer_length_mismatch():
     import pytest
 
     from pymt5.protocol import unpack_outer
+
     # header says body_len=100 but actual body is 4 bytes
     frame = struct.pack("<II", 100, 1) + b"\x00" * 4
     with pytest.raises(ValueError, match="frame length mismatch"):
@@ -284,6 +298,7 @@ def test_unpack_outer_length_mismatch():
 
 def test_unpack_outer_empty_body():
     from pymt5.protocol import unpack_outer
+
     # header says body_len=0, body is empty
     frame = struct.pack("<II", 0, 1)
     body_len, version, body = unpack_outer(frame)
@@ -293,12 +308,13 @@ def test_unpack_outer_empty_body():
 
 def test_parse_response_frame_short_data():
     import pytest
+
     with pytest.raises(ValueError, match="response frame too short"):
         parse_response_frame(b"\x00\x01\x02\x03")  # only 4 bytes, need 5
 
 
 def test_parse_response_frame_exactly_5_bytes():
-    frame = parse_response_frame(b"\xAA\xBB\x00\x00\x05")
+    frame = parse_response_frame(b"\xaa\xbb\x00\x00\x05")
     assert frame.command == 0
     assert frame.code == 5
     assert frame.body == b""
@@ -306,6 +322,7 @@ def test_parse_response_frame_exactly_5_bytes():
 
 def test_series_codec_truncated_buffer():
     import pytest
+
     # TICK_SCHEMA needs 50 bytes, give it only 10
     with pytest.raises(ValueError, match="buffer too short"):
         SeriesCodec.parse(b"\x00" * 10, TICK_SCHEMA)
@@ -313,6 +330,7 @@ def test_series_codec_truncated_buffer():
 
 def test_series_codec_truncated_buffer_with_offset():
     import pytest
+
     # Buffer is 50 bytes but offset=45 leaves only 5 bytes
     with pytest.raises(ValueError, match="buffer too short"):
         SeriesCodec.parse(b"\x00" * 50, TICK_SCHEMA, offset=45)

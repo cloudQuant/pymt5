@@ -18,7 +18,7 @@ import os
 os.environ.setdefault("NO_PROXY", "*")
 os.environ.setdefault("no_proxy", "*")
 
-from pymt5 import MT5WebClient
+from pymt5 import MT5WebClient, AuthenticationError, MT5ConnectionError, PyMT5Error
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("example08")
@@ -100,6 +100,12 @@ async def main():
         # --- Connection State ---
         log.info(f"is_connected: {client.is_connected}")
 
+    except MT5ConnectionError as e:
+        log.error(f"Connection failed: {e}")
+    except AuthenticationError as e:
+        log.error(f"Login failed: {e}")
+    except PyMT5Error as e:
+        log.error(f"MT5 error: {e}")
     finally:
         await client.close()
         log.info("Closed")

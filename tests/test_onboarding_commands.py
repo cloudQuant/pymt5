@@ -36,19 +36,23 @@ def _open_account_body(
     password: str = "demo-pass",
     investor_password: str = "investor-pass",
 ) -> bytes:
-    return SeriesCodec.serialize([
-        (PROP_U32, code),
-        (PROP_I64, login),
-        (PROP_FIXED_STRING, password, 32),
-        (PROP_FIXED_STRING, investor_password, 32),
-    ])
+    return SeriesCodec.serialize(
+        [
+            (PROP_U32, code),
+            (PROP_I64, login),
+            (PROP_FIXED_STRING, password, 32),
+            (PROP_FIXED_STRING, investor_password, 32),
+        ]
+    )
 
 
 def _verification_body(email: bool, phone: bool) -> bytes:
-    return SeriesCodec.serialize([
-        (PROP_U8, int(email)),
-        (PROP_U8, int(phone)),
-    ])
+    return SeriesCodec.serialize(
+        [
+            (PROP_U8, int(email)),
+            (PROP_U8, int(phone)),
+        ]
+    )
 
 
 def test_parse_verification_status_helper():
@@ -70,10 +74,12 @@ def test_parse_open_account_result_helper():
 
 async def test_request_opening_verification_initializes_and_parses_status():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(side_effect=[
-        CommandResult(command=CMD_INIT, code=0, body=b""),
-        CommandResult(command=CMD_VERIFY_CODE, code=0, body=_verification_body(True, False)),
-    ])
+    client.transport.send_command = AsyncMock(
+        side_effect=[
+            CommandResult(command=CMD_INIT, code=0, body=b""),
+            CommandResult(command=CMD_VERIFY_CODE, code=0, body=_verification_body(True, False)),
+        ]
+    )
     request = DemoAccountRequest(
         first_name="Ada",
         second_name="Lovelace",
@@ -110,11 +116,13 @@ async def test_request_opening_verification_initializes_and_parses_status():
 
 async def test_submit_opening_verification_uses_base_payload():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_SEND_VERIFY_CODES,
-        code=0,
-        body=_verification_body(True, True),
-    ))
+    client.transport.send_command = AsyncMock(
+        return_value=CommandResult(
+            command=CMD_SEND_VERIFY_CODES,
+            code=0,
+            body=_verification_body(True, True),
+        )
+    )
     request = DemoAccountRequest(
         first_name="Ada",
         second_name="Lovelace",
@@ -132,10 +140,12 @@ async def test_submit_opening_verification_uses_base_payload():
 
 async def test_open_demo_account_uses_frontend_payload_and_parses_response():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(side_effect=[
-        CommandResult(command=CMD_INIT, code=0, body=b""),
-        CommandResult(command=CMD_OPEN_DEMO, code=0, body=_open_account_body(login=777)),
-    ])
+    client.transport.send_command = AsyncMock(
+        side_effect=[
+            CommandResult(command=CMD_INIT, code=0, body=b""),
+            CommandResult(command=CMD_OPEN_DEMO, code=0, body=_open_account_body(login=777)),
+        ]
+    )
     request = DemoAccountRequest(
         first_name="Ada",
         second_name="Lovelace",
@@ -160,10 +170,12 @@ async def test_open_demo_account_uses_frontend_payload_and_parses_response():
 
 async def test_open_real_account_serializes_birth_date_and_documents():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(side_effect=[
-        CommandResult(command=CMD_INIT, code=0, body=b""),
-        CommandResult(command=CMD_OPEN_REAL, code=0, body=_open_account_body(login=999)),
-    ])
+    client.transport.send_command = AsyncMock(
+        side_effect=[
+            CommandResult(command=CMD_INIT, code=0, body=b""),
+            CommandResult(command=CMD_OPEN_REAL, code=0, body=_open_account_body(login=999)),
+        ]
+    )
     document = AccountDocument(
         data_type=1,
         document_type=3,
@@ -248,16 +260,18 @@ async def test_open_real_account_serializes_birth_date_and_documents():
     assert extra_values[12] == 100000
     assert extra_values[13] == 200000
     assert extra_values[14] == 50000
-    assert payload[extra_offset + extra_size:] == client._build_document_payload(document)
+    assert payload[extra_offset + extra_size :] == client._build_document_payload(document)
 
 
 async def test_enable_otp_builds_expected_payload():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_OTP_SETUP,
-        code=0,
-        body=b"",
-    ))
+    client.transport.send_command = AsyncMock(
+        return_value=CommandResult(
+            command=CMD_OTP_SETUP,
+            code=0,
+            body=b"",
+        )
+    )
 
     await client.enable_otp(
         login=12345678,
@@ -292,11 +306,13 @@ async def test_enable_otp_builds_expected_payload():
 
 async def test_disable_otp_returns_true_and_sends_otp_code():
     client = MT5WebClient()
-    client.transport.send_command = AsyncMock(return_value=CommandResult(
-        command=CMD_OTP_SETUP,
-        code=0,
-        body=b"",
-    ))
+    client.transport.send_command = AsyncMock(
+        return_value=CommandResult(
+            command=CMD_OTP_SETUP,
+            code=0,
+            body=b"",
+        )
+    )
 
     ok = await client.disable_otp(
         login=12345678,

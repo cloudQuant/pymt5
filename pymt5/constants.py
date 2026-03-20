@@ -51,21 +51,78 @@ PERIOD_W1 = 32769
 PERIOD_MN1 = 49153
 
 PERIOD_MAP = {
-    1: PERIOD_M1, 5: PERIOD_M5, 15: PERIOD_M15, 30: PERIOD_M30,
-    60: PERIOD_H1, 240: PERIOD_H4, 1440: PERIOD_D1,
-    10080: PERIOD_W1, 43200: PERIOD_MN1,
+    1: PERIOD_M1,
+    5: PERIOD_M5,
+    15: PERIOD_M15,
+    30: PERIOD_M30,
+    60: PERIOD_H1,
+    240: PERIOD_H4,
+    1440: PERIOD_D1,
+    10080: PERIOD_W1,
+    43200: PERIOD_MN1,
 }
 
 COPY_TICKS_INFO = 1
 COPY_TICKS_TRADE = 2
 COPY_TICKS_ALL = COPY_TICKS_INFO | COPY_TICKS_TRADE
 
-VALID_COMMANDS = frozenset({
-    0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17,
-    18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 33, 34,
-    37, 39, 40, 41, 42, 43, 44, 50, 51, 52, 100, 101, 102,
-    103, 104, 105, 106, 107, 108, 109, 110, 111, 112,
-})
+VALID_COMMANDS = frozenset(
+    {
+        0,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        27,
+        28,
+        29,
+        30,
+        33,
+        34,
+        37,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        50,
+        51,
+        52,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+    }
+)
 
 PROP_I8 = 1
 PROP_I16 = 2
@@ -83,12 +140,12 @@ PROP_FIXED_STRING = 11
 PROP_BYTES = 12
 
 # ---- MT5 Trade Actions (trade_action field in trade_request) ----
-TRADE_ACTION_DEAL = 1        # Place a market order
-TRADE_ACTION_PENDING = 5     # Place a pending order
-TRADE_ACTION_SLTP = 6        # Modify SL/TP of a position
-TRADE_ACTION_MODIFY = 7      # Modify a pending order
-TRADE_ACTION_REMOVE = 8      # Remove a pending order
-TRADE_ACTION_CLOSE_BY = 10   # Close by opposite position
+TRADE_ACTION_DEAL = 1  # Place a market order
+TRADE_ACTION_PENDING = 5  # Place a pending order
+TRADE_ACTION_SLTP = 6  # Modify SL/TP of a position
+TRADE_ACTION_MODIFY = 7  # Modify a pending order
+TRADE_ACTION_REMOVE = 8  # Remove a pending order
+TRADE_ACTION_CLOSE_BY = 10  # Close by opposite position
 
 # ---- MT5 Order Types ----
 ORDER_TYPE_BUY = 0
@@ -101,14 +158,14 @@ ORDER_TYPE_BUY_STOP_LIMIT = 6
 ORDER_TYPE_SELL_STOP_LIMIT = 7
 
 # ---- MT5 Order Filling ----
-ORDER_FILLING_FOK = 0   # Fill or Kill
-ORDER_FILLING_IOC = 1   # Immediate or Cancel
+ORDER_FILLING_FOK = 0  # Fill or Kill
+ORDER_FILLING_IOC = 1  # Immediate or Cancel
 ORDER_FILLING_RETURN = 2  # Return (partial fill allowed)
 
 # ---- MT5 Order Time ----
-ORDER_TIME_GTC = 0       # Good till cancelled
-ORDER_TIME_DAY = 1       # Day order
-ORDER_TIME_SPECIFIED = 2 # Valid until specified time
+ORDER_TIME_GTC = 0  # Good till cancelled
+ORDER_TIME_DAY = 1  # Day order
+ORDER_TIME_SPECIFIED = 2  # Valid until specified time
 ORDER_TIME_SPECIFIED_DAY = 3
 
 # ---- MT5 Position Types ----
