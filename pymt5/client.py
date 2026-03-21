@@ -98,6 +98,7 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         timeout: float = 30.0,
         heartbeat_interval: float = 30.0,
         tick_history_limit: int = 10000,
+        max_tick_symbols: int = 0,
         auto_reconnect: bool = False,
         max_reconnect_attempts: int = 5,
         reconnect_delay: float = 3.0,
@@ -113,8 +114,10 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         self._rate_burst = rate_burst
         self._metrics = metrics
         self.transport = MT5WebSocketTransport(
-            uri=uri, timeout=timeout,
-            rate_limit=rate_limit, rate_burst=rate_burst,
+            uri=uri,
+            timeout=timeout,
+            rate_limit=rate_limit,
+            rate_burst=rate_burst,
             metrics=metrics,
         )
         self._heartbeat_interval = heartbeat_interval
@@ -127,8 +130,10 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         self._tick_cache_by_id: dict[int, Record] = {}
         self._tick_cache_by_name: dict[str, Record] = {}
         self._tick_history_limit = max(0, int(tick_history_limit))
+        self._max_tick_symbols = max(0, int(max_tick_symbols))
         self._tick_history_by_id: dict[int, deque[Record]] = {}
         self._tick_history_by_name: dict[str, deque[Record]] = {}
+        self._tick_history_access_order: list[int] = []
         self._book_cache_by_id: dict[int, Record] = {}
         self._book_cache_by_name: dict[str, Record] = {}
         self._last_error: tuple[int, str] = (0, "")
@@ -210,7 +215,7 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
             try:
                 await self.logout()
             except Exception:
-                pass
+                logger.debug("logout during close() failed", exc_info=True)
             self._logged_in = False
         await self.transport.close()
         self._bootstrap_pristine = False
@@ -222,10 +227,12 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
     def _clear_credentials(self) -> None:
         """Clear stored credentials from memory for security."""
         if self._login_kwargs is not None:
-            # Overwrite password value before discarding
-            if "password" in self._login_kwargs:
-                self._login_kwargs["password"] = ""
+            # Zero-fill password before discarding the reference
+            pw = self._login_kwargs.get("password")
+            if isinstance(pw, str) and pw:
+                self._login_kwargs["password"] = "\x00" * len(pw)
             self._login_kwargs = None
+            logger.debug("credentials cleared from memory")
 
     async def shutdown(self) -> None:
         """Official-style alias for closing the websocket session."""
@@ -305,14 +312,17 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
                     pass
                 # Reset transport for fresh connection
                 self.transport = MT5WebSocketTransport(
-                    uri=self.uri, timeout=self.timeout,
-                    rate_limit=self._rate_limit, rate_burst=self._rate_burst,
+                    uri=self.uri,
+                    timeout=self.timeout,
+                    rate_limit=self._rate_limit,
+                    rate_burst=self._rate_burst,
                     metrics=self._metrics,
                 )
                 self.transport._on_disconnect = self._handle_disconnect
                 await self.transport.connect()
                 # Re-login with stored credentials
-                assert self._login_kwargs is not None  # guarded by line 238
+                if self._login_kwargs is None:
+                    raise SessionError("cannot reconnect: no stored credentials")
                 kwargs = dict(self._login_kwargs)
                 kwargs["auto_heartbeat"] = True
                 await self.login(**kwargs)

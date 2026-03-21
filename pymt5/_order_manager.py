@@ -161,13 +161,13 @@ class OrderManager:
 
         if state_val is not None:
             state_map = {
-                0: OrderState.PENDING,      # ORDER_STATE_STARTED
-                1: OrderState.PENDING,      # ORDER_STATE_PLACED
-                2: OrderState.CANCELED,     # ORDER_STATE_CANCELED
+                0: OrderState.PENDING,  # ORDER_STATE_STARTED
+                1: OrderState.PENDING,  # ORDER_STATE_PLACED
+                2: OrderState.CANCELED,  # ORDER_STATE_CANCELED
                 3: OrderState.PARTIALLY_FILLED,  # ORDER_STATE_PARTIAL
-                4: OrderState.FILLED,       # ORDER_STATE_FILLED
-                5: OrderState.REJECTED,     # ORDER_STATE_REJECTED
-                6: OrderState.EXPIRED,      # ORDER_STATE_EXPIRED
+                4: OrderState.FILLED,  # ORDER_STATE_FILLED
+                5: OrderState.REJECTED,  # ORDER_STATE_REJECTED
+                6: OrderState.EXPIRED,  # ORDER_STATE_EXPIRED
             }
             new_state = state_map.get(state_val)
             if new_state is not None:

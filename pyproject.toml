@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymt5"
-version = "0.9.0"
+version = "1.0.0"
 description = "Python client for MT5 Web Terminal via reverse-engineered WebSocket binary protocol"
 readme = "README.md"
 license = "MIT"
@@ -13,7 +13,7 @@ authors = [
     {name = "cloudQuant"},
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
     "Operating System :: OS Independent",

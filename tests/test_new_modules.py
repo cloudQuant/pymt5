@@ -27,8 +27,14 @@ class TestTickEvent:
     def test_creation(self):
         raw = {"bid": 1.1, "ask": 1.2}
         ev = TickEvent(
-            symbol_id=1, symbol="EURUSD", bid=1.1, ask=1.2,
-            last=1.15, volume=100.0, timestamp=1234567890.0, raw=raw,
+            symbol_id=1,
+            symbol="EURUSD",
+            bid=1.1,
+            ask=1.2,
+            last=1.15,
+            volume=100.0,
+            timestamp=1234567890.0,
+            raw=raw,
         )
         assert ev.symbol_id == 1
         assert ev.symbol == "EURUSD"
@@ -41,23 +47,41 @@ class TestTickEvent:
 
     def test_frozen(self):
         ev = TickEvent(
-            symbol_id=1, symbol="EURUSD", bid=1.1, ask=1.2,
-            last=0.0, volume=0.0, timestamp=0.0, raw={},
+            symbol_id=1,
+            symbol="EURUSD",
+            bid=1.1,
+            ask=1.2,
+            last=0.0,
+            volume=0.0,
+            timestamp=0.0,
+            raw={},
         )
         with pytest.raises(FrozenInstanceError):
             ev.bid = 2.0  # type: ignore[misc]
 
     def test_equality(self):
         kwargs = dict(
-            symbol_id=1, symbol="EURUSD", bid=1.1, ask=1.2,
-            last=0.0, volume=0.0, timestamp=0.0, raw={},
+            symbol_id=1,
+            symbol="EURUSD",
+            bid=1.1,
+            ask=1.2,
+            last=0.0,
+            volume=0.0,
+            timestamp=0.0,
+            raw={},
         )
         assert TickEvent(**kwargs) == TickEvent(**kwargs)
 
     def test_repr(self):
         ev = TickEvent(
-            symbol_id=1, symbol="X", bid=0.0, ask=0.0,
-            last=0.0, volume=0.0, timestamp=0.0, raw={},
+            symbol_id=1,
+            symbol="X",
+            bid=0.0,
+            ask=0.0,
+            last=0.0,
+            volume=0.0,
+            timestamp=0.0,
+            raw={},
         )
         assert "TickEvent" in repr(ev)
         assert "symbol='X'" in repr(ev)
@@ -83,8 +107,13 @@ class TestTradeResultEvent:
     def test_creation(self):
         raw = {"retcode": 10009}
         ev = TradeResultEvent(
-            retcode=10009, order=123, deal=456,
-            volume=0.01, price=1.1, comment="ok", raw=raw,
+            retcode=10009,
+            order=123,
+            deal=456,
+            volume=0.01,
+            price=1.1,
+            comment="ok",
+            raw=raw,
         )
         assert ev.retcode == 10009
         assert ev.order == 123
@@ -95,8 +124,13 @@ class TestTradeResultEvent:
 
     def test_frozen(self):
         ev = TradeResultEvent(
-            retcode=0, order=0, deal=0,
-            volume=0.0, price=0.0, comment="", raw={},
+            retcode=0,
+            order=0,
+            deal=0,
+            volume=0.0,
+            price=0.0,
+            comment="",
+            raw={},
         )
         with pytest.raises(FrozenInstanceError):
             ev.retcode = 1  # type: ignore[misc]
@@ -106,8 +140,11 @@ class TestAccountEvent:
     def test_creation(self):
         raw = {"balance": 1000.0}
         ev = AccountEvent(
-            balance=1000.0, equity=1100.0, margin=50.0,
-            margin_free=1050.0, raw=raw,
+            balance=1000.0,
+            equity=1100.0,
+            margin=50.0,
+            margin_free=1050.0,
+            raw=raw,
         )
         assert ev.balance == 1000.0
         assert ev.equity == 1100.0
@@ -117,14 +154,22 @@ class TestAccountEvent:
 
     def test_frozen(self):
         ev = AccountEvent(
-            balance=0.0, equity=0.0, margin=0.0, margin_free=0.0, raw={},
+            balance=0.0,
+            equity=0.0,
+            margin=0.0,
+            margin_free=0.0,
+            raw={},
         )
         with pytest.raises(FrozenInstanceError):
             ev.balance = 999.0  # type: ignore[misc]
 
     def test_equality(self):
         kwargs = dict(
-            balance=100.0, equity=100.0, margin=10.0, margin_free=90.0, raw={},
+            balance=100.0,
+            equity=100.0,
+            margin=10.0,
+            margin_free=90.0,
+            raw={},
         )
         assert AccountEvent(**kwargs) == AccountEvent(**kwargs)
 

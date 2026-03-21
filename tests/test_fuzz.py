@@ -186,15 +186,15 @@ def test_serialize_parse_roundtrip(field_values):
 # ---------------------------------------------------------------------------
 
 _tick_values = st.tuples(
-    st.integers(min_value=0, max_value=2**32 - 1),   # symbol_id (U32)
+    st.integers(min_value=0, max_value=2**32 - 1),  # symbol_id (U32)
     st.integers(min_value=-(2**31), max_value=2**31 - 1),  # tick_time (I32)
-    st.integers(min_value=0, max_value=2**32 - 1),    # fields (U32)
+    st.integers(min_value=0, max_value=2**32 - 1),  # fields (U32)
     st.floats(min_value=-1e10, max_value=1e10, allow_nan=False, allow_infinity=False),  # bid
     st.floats(min_value=-1e10, max_value=1e10, allow_nan=False, allow_infinity=False),  # ask
     st.floats(min_value=-1e10, max_value=1e10, allow_nan=False, allow_infinity=False),  # last
     st.integers(min_value=-(2**63), max_value=2**63 - 1),  # tick_volume (I64)
-    st.integers(min_value=0, max_value=2**32 - 1),    # time_ms_delta (U32)
-    st.integers(min_value=0, max_value=2**16 - 1),    # flags (U16)
+    st.integers(min_value=0, max_value=2**32 - 1),  # time_ms_delta (U32)
+    st.integers(min_value=0, max_value=2**16 - 1),  # flags (U16)
 )
 
 

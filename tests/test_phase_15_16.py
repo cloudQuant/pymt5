@@ -88,14 +88,18 @@ def _build_book_body(
         {"propType": PROP_U16, "propValue": 0},
     ]
     header_data = SeriesCodec.serialize(header_fields)
-    bid_level = SeriesCodec.serialize([
-        {"propType": PROP_F64, "propValue": bid_price},
-        {"propType": PROP_I64, "propValue": bid_volume},
-    ])
-    ask_level = SeriesCodec.serialize([
-        {"propType": PROP_F64, "propValue": ask_price},
-        {"propType": PROP_I64, "propValue": ask_volume},
-    ])
+    bid_level = SeriesCodec.serialize(
+        [
+            {"propType": PROP_F64, "propValue": bid_price},
+            {"propType": PROP_I64, "propValue": bid_volume},
+        ]
+    )
+    ask_level = SeriesCodec.serialize(
+        [
+            {"propType": PROP_F64, "propValue": ask_price},
+            {"propType": PROP_I64, "propValue": ask_volume},
+        ]
+    )
     return count_header + header_data + bid_level + ask_level
 
 
@@ -137,8 +141,10 @@ def _create_push_handlers_mixin():
     obj._tick_cache_by_id = {}
     obj._tick_cache_by_name = {}
     obj._tick_history_limit = 100
+    obj._max_tick_symbols = 0
     obj._tick_history_by_id = {}
     obj._tick_history_by_name = {}
+    obj._tick_history_access_order = []
     obj._book_cache_by_id = {}
     obj._book_cache_by_name = {}
     obj._typed_tick_handlers = []
@@ -161,8 +167,10 @@ def _create_market_data_mixin():
     obj._tick_cache_by_id = {}
     obj._tick_cache_by_name = {}
     obj._tick_history_limit = 100
+    obj._max_tick_symbols = 0
     obj._tick_history_by_id = {}
     obj._tick_history_by_name = {}
+    obj._tick_history_access_order = []
     obj._book_cache_by_id = {}
     obj._book_cache_by_name = {}
     obj._subscribed_ids = []
@@ -892,10 +900,17 @@ class TestReconnectCount:
             max_reconnect_delay=0.05,
         )
         client._login_kwargs = {
-            "login": 12345, "password": "test", "url": "",
-            "session": 0, "otp": "", "version": 0, "cid": None,
-            "lead_cookie_id": 0, "lead_affiliate_site": "",
-            "utm_campaign": "", "utm_source": "",
+            "login": 12345,
+            "password": "test",
+            "url": "",
+            "session": 0,
+            "otp": "",
+            "version": 0,
+            "cid": None,
+            "lead_cookie_id": 0,
+            "lead_affiliate_site": "",
+            "utm_campaign": "",
+            "utm_source": "",
         }
         client._subscribed_ids = []
         client._subscribed_book_ids = []

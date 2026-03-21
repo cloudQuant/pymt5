@@ -260,9 +260,14 @@ class TestOrderManager:
     def test_update_from_trade_result_done(self):
         mgr = OrderManager()
         mgr.track_order(1, "EURUSD", 0, 0.01, 1.12)
-        result = mgr.update_from_trade_result({
-            "order": 1, "retcode": 10009, "price": 1.125, "comment": "done",
-        })
+        result = mgr.update_from_trade_result(
+            {
+                "order": 1,
+                "retcode": 10009,
+                "price": 1.125,
+                "comment": "done",
+            }
+        )
         assert result is not None
         assert result.state == OrderState.FILLED
         assert result.filled_volume == 0.01
@@ -272,9 +277,13 @@ class TestOrderManager:
     def test_update_from_trade_result_partial(self):
         mgr = OrderManager()
         mgr.track_order(1, "EURUSD", 0, 1.0, 1.12)
-        result = mgr.update_from_trade_result({
-            "order": 1, "retcode": 10010, "volume": 0.5,
-        })
+        result = mgr.update_from_trade_result(
+            {
+                "order": 1,
+                "retcode": 10010,
+                "volume": 0.5,
+            }
+        )
         assert result.state == OrderState.PARTIALLY_FILLED
         assert result.filled_volume == 0.5
 

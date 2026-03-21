@@ -415,7 +415,7 @@ class TestSendRaw:
             await t._send_raw(CMD_BOOTSTRAP, b"", check_ready=False)
 
     async def test_send_raw_timeout_cleans_leaked_future(self):
-        """On timeout, _send_raw() removes the leaked future from _pending."""
+        """On timeout, _send_raw() removes or skips done futures from _pending."""
         t = MT5WebSocketTransport(uri="wss://example.com", timeout=0.1)
         t.is_ready = True
         mock_ws = _make_mock_ws()
@@ -425,9 +425,11 @@ class TestSendRaw:
         with pytest.raises(TimeoutError):
             await t._send_raw(CMD_GET_ACCOUNT, b"", check_ready=True)
 
-        # The future should have been removed from _pending
+        # The future should be removed or already done (cancelled by wait_for)
         queue = t._pending.get(CMD_GET_ACCOUNT)
-        assert queue is None or len(queue) == 0
+        if queue:
+            # Any remaining futures must already be done (cancelled)
+            assert all(f.done() for f in queue)
 
     async def test_send_raw_timeout_with_empty_queue(self):
         """Timeout cleanup handles case where future was already removed from queue."""

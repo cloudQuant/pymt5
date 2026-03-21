@@ -35,16 +35,12 @@ class TokenBucketRateLimiter:
         """Wait until a token is available, then consume one."""
         if self.rate <= 0:
             return
-        async with self._lock:
-            while True:
+        while True:
+            async with self._lock:
                 self._refill()
                 if self._tokens >= 1.0:
                     self._tokens -= 1.0
                     return
                 wait = (1.0 - self._tokens) / self.rate
-                # Release lock during sleep so other coroutines can proceed
-                self._lock.release()
-                try:
-                    await asyncio.sleep(wait)
-                finally:
-                    await self._lock.acquire()
+            # Sleep outside the lock — cancellation-safe
+            await asyncio.sleep(wait)

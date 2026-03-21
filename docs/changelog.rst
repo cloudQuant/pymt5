@@ -1,10 +1,42 @@
 Changelog
 =========
 
-Unreleased
-----------
+v1.0.0 (2026-03-21)
+--------------------
 
-- No unreleased changes yet.
+- **Production stable release**
+- Fixed critical rate limiter cancellation safety bug — ``acquire()`` is now
+  fully cancellation-safe with lock held only during token check
+- Fixed transport future leak on timeout — pending futures are now cleaned up
+  when cancelled
+- Fixed disconnect callback race condition — close/recv_loop disconnect now
+  serialized with ``asyncio.Lock``
+- Replaced ``assert`` with explicit ``SessionError`` for missing credentials
+  on reconnect
+- Improved credential clearing — password is zero-filled before discard
+- Fixed silent error swallowing during logout in ``close()`` — now logs at
+  DEBUG level
+- Fixed tick cache race condition — switched to ``setdefault()`` for atomic
+  deque creation
+- Fixed callback error handler isolation — individual handler failures no
+  longer break the handler chain
+- Strengthened order validation — added checks for MODIFY, REMOVE, SLTP,
+  CLOSE_BY actions; added SL/TP non-negative checks and volume overflow guard
+- Added configurable tick history limits with LRU eviction
+  (``max_tick_symbols`` parameter, ``clear_tick_history()`` method)
+- Code formatting cleanup across all source files
+- 1020+ offline unit tests, 99% test coverage
+
+v0.9.0 (2026-03-20)
+--------------------
+
+- Currency mixin extraction, typed events, order manager, connection pool,
+  protocol documentation
+
+v0.8.0 (2026-03-19)
+--------------------
+
+- Major refactor — mixin architecture, custom exceptions, 99% test coverage
 
 v0.7.0 (2026-03-17)
 -------------------

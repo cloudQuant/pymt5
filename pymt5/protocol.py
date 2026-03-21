@@ -37,7 +37,7 @@ _DEBUG = bool(os.environ.get("PYMT5_DEBUG"))
 _debug_logger = logging.getLogger("pymt5.protocol.debug")
 
 # Timestamp validation bounds (unix milliseconds)
-_TS_MIN_MS = 946_684_800_000   # year 2000
+_TS_MIN_MS = 946_684_800_000  # year 2000
 _TS_MAX_MS = 4_102_444_800_000  # year 2100
 
 
@@ -141,13 +141,19 @@ _FIXED_PACK: dict[int, tuple[str, int]] = {
 
 # Fixed-size types that use struct.pack with a type coercion
 _PACK_COERCE: dict[int, type] = {
-    PROP_I8: int, PROP_U8: int, PROP_I16: int, PROP_U16: int,
-    PROP_I32: int, PROP_U32: int, PROP_F32: float, PROP_F64: float,
+    PROP_I8: int,
+    PROP_U8: int,
+    PROP_I16: int,
+    PROP_U16: int,
+    PROP_I32: int,
+    PROP_U32: int,
+    PROP_F32: float,
+    PROP_F64: float,
 }
 
 # 8-byte integer types
 _INT8_TYPES: dict[int, bool] = {
-    PROP_I64: True,   # signed
+    PROP_I64: True,  # signed
     PROP_U64: False,  # unsigned
 }
 
@@ -285,7 +291,10 @@ class SeriesCodec:
                     if ts != 0 and not (_TS_MIN_MS <= ts <= _TS_MAX_MS):
                         _debug_logger.warning(
                             "parse: field %d timestamp %d out of range [%d, %d]",
-                            i, ts, _TS_MIN_MS, _TS_MAX_MS,
+                            i,
+                            ts,
+                            _TS_MIN_MS,
+                            _TS_MAX_MS,
                         )
             _debug_logger.debug("parse: %d fields, values=%s", len(values), values)
 

@@ -22,6 +22,7 @@ through a clean async Python API.
    iteration_plan_v2
    iteration_plan_v3
    iteration_plan_v4
+   iteration_plan_v5
    changelog
 
 Features

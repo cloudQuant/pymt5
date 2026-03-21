@@ -394,8 +394,25 @@ class _TradingMixin:
     ) -> TradeResult:
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_PENDING) and volume <= 0:
             raise ValidationError(f"volume must be > 0 for trade_action={trade_action}, got {volume}")
+        if trade_action == TRADE_ACTION_DEAL and price_order <= 0.0:
+            logger.debug("market order with price_order=0; server will use current price")
         if trade_action == TRADE_ACTION_PENDING and price_order <= 0.0:
             raise ValidationError(f"price_order must be > 0 for pending orders, got {price_order}")
+        if trade_action == TRADE_ACTION_MODIFY and order <= 0:
+            raise ValidationError(f"order ticket must be > 0 for MODIFY action, got {order}")
+        if trade_action == TRADE_ACTION_REMOVE and order <= 0:
+            raise ValidationError(f"order ticket must be > 0 for REMOVE action, got {order}")
+        if trade_action == TRADE_ACTION_SLTP and position_id <= 0:
+            raise ValidationError(f"position_id must be > 0 for SLTP action, got {position_id}")
+        if trade_action == TRADE_ACTION_CLOSE_BY and (position_id <= 0 or position_by <= 0):
+            raise ValidationError(
+                f"position_id and position_by must be > 0 for CLOSE_BY, "
+                f"got position_id={position_id}, position_by={position_by}"
+            )
+        if price_sl < 0.0:
+            raise ValidationError(f"price_sl must be >= 0, got {price_sl}")
+        if price_tp < 0.0:
+            raise ValidationError(f"price_tp must be >= 0, got {price_tp}")
         payload = SeriesCodec.serialize(
             [
                 (PROP_U32, action_id),
@@ -434,7 +451,10 @@ class _TradingMixin:
         if order_type in {ORDER_TYPE_BUY_STOP_LIMIT, ORDER_TYPE_SELL_STOP_LIMIT}:
             price_order = stoplimit
             price_trigger = price
-        volume = self._volume_to_lots(float(request.get("volume", 0.0) or 0.0))
+        raw_volume = float(request.get("volume", 0.0) or 0.0)
+        volume = self._volume_to_lots(raw_volume)
+        if volume < 0:
+            raise ValidationError(f"volume encoding overflow: {raw_volume} -> {volume}")
         digits = self._resolve_digits(symbol, None) if symbol else 0
         return await self.trade_request(
             action_id=int(request.get("action_id", request.get("request_id", 0)) or 0),
@@ -550,7 +570,9 @@ class _TradingMixin:
         }
 
     async def _validate_deal_or_pending(
-        self, request: Record, symbol_info: dict | None,
+        self,
+        request: Record,
+        symbol_info: dict | None,
     ) -> tuple[int, str] | None:
         """Validate fields for DEAL/PENDING actions.
 
@@ -698,4 +720,3 @@ class _TradingMixin:
             tr = TradeResult(retcode=retcode, description=desc, success=success)
         logger.info("trade_request %s action=%d vol=%d -> %s", symbol, trade_action, volume, tr)
         return tr
-

@@ -1307,8 +1307,10 @@ class MockPushClient(_PushHandlersMixin):
         self._tick_cache_by_id = {}
         self._tick_cache_by_name = {}
         self._tick_history_limit = 100
+        self._max_tick_symbols = 0
         self._tick_history_by_id = {}
         self._tick_history_by_name = {}
+        self._tick_history_access_order = []
         self._book_cache_by_id = {}
         self._book_cache_by_name = {}
 

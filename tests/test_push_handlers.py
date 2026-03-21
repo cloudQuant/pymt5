@@ -48,8 +48,10 @@ class MockClient(_PushHandlersMixin):
         self._tick_cache_by_id: dict = {}
         self._tick_cache_by_name: dict = {}
         self._tick_history_limit: int = 100
+        self._max_tick_symbols: int = 0
         self._tick_history_by_id: dict = {}
         self._tick_history_by_name: dict = {}
+        self._tick_history_access_order: list = []
         self._book_cache_by_id: dict = {}
         self._book_cache_by_name: dict = {}
 

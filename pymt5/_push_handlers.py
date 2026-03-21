@@ -68,8 +68,10 @@ class _PushHandlersMixin:
     _tick_cache_by_id: dict[int, Record]
     _tick_cache_by_name: dict[str, Record]
     _tick_history_limit: int
+    _max_tick_symbols: int
     _tick_history_by_id: dict[int, deque[Record]]
     _tick_history_by_name: dict[str, deque[Record]]
+    _tick_history_access_order: list[int]
     _book_cache_by_id: dict[int, Record]
     _book_cache_by_name: dict[str, Record]
     # Typed handler lists (Phase 16.1)
@@ -436,17 +438,53 @@ class _PushHandlersMixin:
             for tick in _parse_tick_batch(result.body, self._symbols_by_id):
                 symbol_id = int(tick["symbol_id"])
                 self._tick_cache_by_id[symbol_id] = tick
-                history = self._tick_history_by_id.get(symbol_id)
-                if history is None:
-                    history = deque(maxlen=self._tick_history_limit or None)
-                    self._tick_history_by_id[symbol_id] = history
+                # Atomic deque creation via setdefault to avoid race conditions
+                history = self._tick_history_by_id.setdefault(
+                    symbol_id,
+                    deque(maxlen=self._tick_history_limit or None),
+                )
                 history.append(dict(tick))
+                # Update LRU access order for eviction
+                if symbol_id in self._tick_history_access_order:
+                    self._tick_history_access_order.remove(symbol_id)
+                self._tick_history_access_order.append(symbol_id)
+                # Evict least-recently-updated symbol if limit exceeded
+                if self._max_tick_symbols > 0:
+                    while len(self._tick_history_by_id) > self._max_tick_symbols:
+                        if not self._tick_history_access_order:
+                            break
+                        evict_id = self._tick_history_access_order.pop(0)
+                        evicted = self._tick_history_by_id.pop(evict_id, None)
+                        if evicted is not None:
+                            # Also remove from name-keyed history
+                            evict_info = self._symbols_by_id.get(evict_id)
+                            if evict_info:
+                                self._tick_history_by_name.pop(evict_info.name, None)
                 symbol_name = tick.get("symbol")
                 if symbol_name:
                     self._tick_cache_by_name[str(symbol_name)] = tick
                     self._tick_history_by_name[str(symbol_name)] = history
         except _PARSE_ERRORS as exc:
             logger.debug("tick cache update failed: %s", exc)
+
+    def clear_tick_history(self, symbol_id: int | None = None) -> None:
+        """Clear tick history for a specific symbol or all symbols.
+
+        Args:
+            symbol_id: If provided, clear only that symbol's history.
+                       If ``None``, clear all tick history.
+        """
+        if symbol_id is not None:
+            self._tick_history_by_id.pop(symbol_id, None)
+            if symbol_id in self._tick_history_access_order:
+                self._tick_history_access_order.remove(symbol_id)
+            sym_info = self._symbols_by_id.get(symbol_id)
+            if sym_info:
+                self._tick_history_by_name.pop(sym_info.name, None)
+        else:
+            self._tick_history_by_id.clear()
+            self._tick_history_by_name.clear()
+            self._tick_history_access_order.clear()
 
     def _cache_book_push(self, result: CommandResult) -> None:
         try:

@@ -123,7 +123,7 @@ class TestTransportMetricsCallbacks:
                 patch.object(t, "_recv_loop", return_value=None),
                 patch("asyncio.create_task", return_value=MagicMock()),
             ):
-                        await t.connect()
+                await t.connect()
 
         assert metrics.connect_count == 1
         assert t.state == TransportState.READY
@@ -173,9 +173,7 @@ class TestTransportMetricsCallbacks:
         # Simulate a WebSocket disconnect by raising ConnectionClosedError
         import websockets.exceptions
 
-        mock_ws.__aiter__ = MagicMock(
-            side_effect=websockets.exceptions.ConnectionClosedError(None, None)
-        )
+        mock_ws.__aiter__ = MagicMock(side_effect=websockets.exceptions.ConnectionClosedError(None, None))
         t.ws = mock_ws
         t._on_disconnect = None
 
@@ -276,8 +274,9 @@ class TestProtocolParseErrors:
         buffer = bytes(64)
         # get_series_size is called first and raises its own error.
         # We must bypass it to reach the parse-specific error on line 246.
-        with patch("pymt5.protocol.get_series_size", return_value=0), pytest.raises(
-            ProtocolError, match="fixed string requires propLength"
+        with (
+            patch("pymt5.protocol.get_series_size", return_value=0),
+            pytest.raises(ProtocolError, match="fixed string requires propLength"),
         ):
             SeriesCodec.parse(buffer, schema)
 
@@ -285,8 +284,9 @@ class TestProtocolParseErrors:
         """Cover line 251: ProtocolError for PROP_BYTES with no propLength"""
         schema = [{"propType": PROP_BYTES}]  # missing propLength
         buffer = bytes(64)
-        with patch("pymt5.protocol.get_series_size", return_value=0), pytest.raises(
-            ProtocolError, match="bytes requires propLength"
+        with (
+            patch("pymt5.protocol.get_series_size", return_value=0),
+            pytest.raises(ProtocolError, match="bytes requires propLength"),
         ):
             SeriesCodec.parse(buffer, schema)
 
@@ -294,8 +294,9 @@ class TestProtocolParseErrors:
         """Cover line 256: ProtocolError for PROP_STRING with no propLength"""
         schema = [{"propType": PROP_STRING}]  # missing propLength
         buffer = bytes(64)
-        with patch("pymt5.protocol.get_series_size", return_value=0), pytest.raises(
-            ProtocolError, match="string requires propLength"
+        with (
+            patch("pymt5.protocol.get_series_size", return_value=0),
+            pytest.raises(ProtocolError, match="string requires propLength"),
         ):
             SeriesCodec.parse(buffer, schema)
 
@@ -303,8 +304,9 @@ class TestProtocolParseErrors:
         """Cover line 260: NotImplementedError for unsupported prop_type"""
         schema = [{"propType": 999}]  # unsupported type
         buffer = bytes(64)
-        with patch("pymt5.protocol.get_series_size", return_value=0), pytest.raises(
-            NotImplementedError, match="unsupported propType=999"
+        with (
+            patch("pymt5.protocol.get_series_size", return_value=0),
+            pytest.raises(NotImplementedError, match="unsupported propType=999"),
         ):
             SeriesCodec.parse(buffer, schema)
 
@@ -700,7 +702,7 @@ class TestInitImportErrorFallback:
         """Cover lines 10-11: ImportError fallback for importlib.metadata.
 
         We reload pymt5.__init__ with importlib.metadata blocked so the
-        except ImportError branch executes and sets __version__ = "0.9.0".
+        except ImportError branch executes and sets __version__ = "1.0.0".
         """
         import pymt5
 
@@ -710,7 +712,7 @@ class TestInitImportErrorFallback:
             # Setting a module to None in sys.modules causes ImportError
             sys.modules["importlib.metadata"] = None  # type: ignore[assignment]
             importlib.reload(pymt5)
-            assert pymt5.__version__ == "0.9.0"
+            assert pymt5.__version__ == "1.0.0"
         finally:
             # Restore
             if real_metadata is not None:
@@ -735,8 +737,10 @@ def _create_push_handlers_mixin():
     obj._tick_cache_by_id = {}
     obj._tick_cache_by_name = {}
     obj._tick_history_limit = 100
+    obj._max_tick_symbols = 0
     obj._tick_history_by_id = {}
     obj._tick_history_by_name = {}
+    obj._tick_history_access_order = []
     obj._book_cache_by_id = {}
     obj._book_cache_by_name = {}
     return obj
@@ -754,8 +758,10 @@ def _create_market_data_mixin():
     obj._tick_cache_by_id = {}
     obj._tick_cache_by_name = {}
     obj._tick_history_limit = 100
+    obj._max_tick_symbols = 0
     obj._tick_history_by_id = {}
     obj._tick_history_by_name = {}
+    obj._tick_history_access_order = []
     obj._book_cache_by_id = {}
     obj._book_cache_by_name = {}
     obj._subscribed_ids = []

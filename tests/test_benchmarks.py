@@ -62,15 +62,15 @@ _BENCH_BUFFER = SeriesCodec.serialize(_BENCH_SCHEMA_FIELDS)
 def _build_tick_buffer() -> bytes:
     """Build a realistic tick buffer for parsing benchmarks."""
     fields = [
-        (PROP_U32, 1),       # symbol_id
+        (PROP_U32, 1),  # symbol_id
         (PROP_I32, 1710501234),  # tick_time
-        (PROP_U32, 0xFF),    # fields
-        (PROP_F64, 1.08765), # bid
-        (PROP_F64, 1.08770), # ask
-        (PROP_F64, 0.0),     # last
-        (PROP_I64, 100),     # tick_volume
-        (PROP_U32, 500),     # time_ms_delta
-        (PROP_U16, 0),       # flags
+        (PROP_U32, 0xFF),  # fields
+        (PROP_F64, 1.08765),  # bid
+        (PROP_F64, 1.08770),  # ask
+        (PROP_F64, 0.0),  # last
+        (PROP_I64, 100),  # tick_volume
+        (PROP_U32, 500),  # time_ms_delta
+        (PROP_U16, 0),  # flags
     ]
     return SeriesCodec.serialize(fields)
 

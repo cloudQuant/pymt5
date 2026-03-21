@@ -66,6 +66,7 @@ class MT5WebSocketTransport:
         self._listeners: dict[int, set[Callable[[CommandResult], Awaitable[None] | None]]] = defaultdict(set)
         self._on_disconnect: Callable[[], None] | None = None
         self._shutdown_event = asyncio.Event()
+        self._disconnect_lock = asyncio.Lock()
         self._metrics = metrics
         self._last_message_at: float = 0.0
         self._connected_at: float = 0.0
@@ -138,8 +139,9 @@ class MT5WebSocketTransport:
 
     async def close(self) -> None:
         logger.info("closing transport")
-        self._state = TransportState.CLOSING
-        self._shutdown_event.set()
+        async with self._disconnect_lock:
+            self._state = TransportState.CLOSING
+            self._shutdown_event.set()
         if self._recv_task is not None:
             self._recv_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -185,12 +187,13 @@ class MT5WebSocketTransport:
             return await asyncio.wait_for(future, timeout=self.timeout)
         except TimeoutError:
             # Remove leaked future from _pending on timeout (Phase 2.1)
-            queue = self._pending.get(command)
-            if queue:
-                try:
-                    queue.remove(future)
-                except ValueError:
-                    pass
+            if not future.done():
+                queue = self._pending.get(command)
+                if queue:
+                    try:
+                        queue.remove(future)
+                    except ValueError:
+                        pass
             raise MT5TimeoutError(f"command {command} timed out after {self.timeout}s") from None
 
     async def _recv_loop(self) -> None:
@@ -218,7 +221,15 @@ class MT5WebSocketTransport:
             self._state = TransportState.ERROR
             if self._metrics:
                 self._metrics.on_disconnect(str(exc))
-            if self._on_disconnect and not self._shutdown_event.is_set():
+            # Serialize against close() to prevent double-disconnect
+            should_notify = False
+            try:
+                async with self._disconnect_lock:
+                    if self._on_disconnect and not self._shutdown_event.is_set():
+                        should_notify = True
+            except asyncio.CancelledError:
+                raise
+            if should_notify and self._on_disconnect:
                 self._on_disconnect()
 
     async def _dispatch(self, frame: ResponseFrame) -> None:
@@ -244,11 +255,15 @@ class MT5WebSocketTransport:
                     exc,
                     traceback.format_exc(),
                 )
-                for error_handler in self._callback_error_handlers:
+                for error_handler in tuple(self._callback_error_handlers):
                     try:
                         error_handler(exc, callback)
                     except Exception:
-                        logger.error("callback error handler itself raised: %s", traceback.format_exc())
+                        logger.warning(
+                            "callback error handler %s itself raised",
+                            getattr(error_handler, "__name__", repr(error_handler)),
+                            exc_info=True,
+                        )
 
     def _fail_all(self, exc: Exception) -> None:
         for queue in self._pending.values():

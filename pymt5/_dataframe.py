@@ -26,7 +26,6 @@ def to_dataframe(records: list[dict[str, Any]]) -> Any:
         import pandas as pd  # type: ignore[import-untyped]
     except ImportError:
         raise ImportError(
-            "pandas is required for DataFrame conversion. "
-            "Install it with: pip install pymt5[pandas]"
+            "pandas is required for DataFrame conversion. Install it with: pip install pymt5[pandas]"
         ) from None
     return pd.DataFrame(records)
