@@ -69,6 +69,7 @@ from pymt5.constants import (
     PROP_U64,
     TRADE_ACTION_PENDING,
 )
+from pymt5.exceptions import ProtocolError
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
     ACCOUNT_WEB_MAIN_SCHEMA,
@@ -1102,10 +1103,10 @@ def test_parse_open_account_result_valid():
 
 
 def test_field_type_non_int_mapping():
-    """Cover line 87: non-int propType in Mapping raises TypeError."""
+    """Cover line 87: non-int propType in Mapping raises ProtocolError."""
     from pymt5.protocol import _field_type
 
-    with pytest.raises(TypeError, match="propType must be an int"):
+    with pytest.raises(ProtocolError, match="propType must be an int"):
         _field_type({"propType": "not_an_int"})
 
 
@@ -1113,10 +1114,10 @@ def test_field_type_non_int_mapping():
 
 
 def test_field_type_non_int_sequence():
-    """Cover line 91: non-int propType in Sequence raises TypeError."""
+    """Cover line 91: non-int propType in Sequence raises ProtocolError."""
     from pymt5.protocol import _field_type
 
-    with pytest.raises(TypeError, match="propType must be an int"):
+    with pytest.raises(ProtocolError, match="propType must be an int"):
         _field_type(("not_an_int", 42))
 
 
@@ -1124,10 +1125,10 @@ def test_field_type_non_int_sequence():
 
 
 def test_field_length_non_int_mapping():
-    """Cover line 107: non-int propLength in Mapping raises TypeError."""
+    """Cover line 107: non-int propLength in Mapping raises ProtocolError."""
     from pymt5.protocol import _field_length
 
-    with pytest.raises(TypeError, match="propLength must be an int"):
+    with pytest.raises(ProtocolError, match="propLength must be an int"):
         _field_length({"propType": PROP_FIXED_STRING, "propLength": "bad"})
 
 
@@ -1135,10 +1136,10 @@ def test_field_length_non_int_mapping():
 
 
 def test_field_length_non_int_sequence():
-    """Cover line 113: non-int propLength in Sequence raises TypeError."""
+    """Cover line 113: non-int propLength in Sequence raises ProtocolError."""
     from pymt5.protocol import _field_length
 
-    with pytest.raises(TypeError, match="propLength must be an int"):
+    with pytest.raises(ProtocolError, match="propLength must be an int"):
         _field_length((PROP_FIXED_STRING, "value", "bad"))
 
 

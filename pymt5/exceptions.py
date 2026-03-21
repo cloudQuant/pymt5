@@ -5,8 +5,19 @@ class PyMT5Error(Exception):
     """Base exception for all pymt5 errors."""
 
 
-class MT5ConnectionError(PyMT5Error):
-    """Raised when connection to the MT5 server fails."""
+class MT5ConnectionError(PyMT5Error, ConnectionError):
+    """Raised when connection to the MT5 server fails.
+
+    Inherits from ConnectionError for compatibility with stdlib
+    connection error handling patterns.
+
+    Attributes:
+        server_uri: The URI of the server that was being connected to.
+    """
+
+    def __init__(self, message: str = "", *, server_uri: str = "") -> None:
+        super().__init__(message)
+        self.server_uri = server_uri
 
 
 class AuthenticationError(PyMT5Error):
@@ -18,11 +29,33 @@ class TradeError(PyMT5Error, ValueError):
 
     Inherits from ValueError for backward compatibility with existing
     code that catches ValueError from trade validation.
+
+    Attributes:
+        retcode: MT5 return code.
+        symbol: Symbol involved in the trade.
+        action: Trade action that failed.
     """
 
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retcode: int = 0,
+        symbol: str = "",
+        action: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.retcode = retcode
+        self.symbol = symbol
+        self.action = action
 
-class ProtocolError(PyMT5Error):
-    """Raised when the binary protocol parsing fails."""
+
+class ProtocolError(PyMT5Error, ValueError):
+    """Raised when the binary protocol parsing fails.
+
+    Inherits from ValueError for backward compatibility with existing
+    code that catches ValueError from protocol parsing.
+    """
 
 
 class SymbolNotFoundError(PyMT5Error, KeyError):
@@ -48,5 +81,9 @@ class SessionError(PyMT5Error, RuntimeError):
     """
 
 
-class MT5TimeoutError(PyMT5Error):
-    """Raised when a command times out."""
+class MT5TimeoutError(PyMT5Error, TimeoutError):
+    """Raised when a command times out.
+
+    Inherits from TimeoutError for compatibility with stdlib
+    timeout handling patterns (e.g., asyncio.wait_for).
+    """

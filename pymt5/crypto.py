@@ -2,13 +2,14 @@ from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from pymt5.constants import INITIAL_KEY_OBFUSCATED
+from pymt5.exceptions import ProtocolError
 from pymt5.helpers import hex_to_bytes, obfuscation_decode
 
 
 class AESCipher:
     def __init__(self, key: bytes):
         if len(key) not in (16, 24, 32):
-            raise ValueError(f"invalid AES key length: {len(key)}")
+            raise ProtocolError(f"invalid AES key length: {len(key)}")
         self._key = key
         self._iv = b"\x00" * 16
 

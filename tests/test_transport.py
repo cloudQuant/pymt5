@@ -201,7 +201,7 @@ async def test_send_command_not_ready_raises():
 async def test_send_command_no_ws_raises():
     t = MT5WebSocketTransport(uri="wss://x")
     t.is_ready = True
-    with pytest.raises(RuntimeError, match="websocket not connected"):
+    with pytest.raises((RuntimeError, ConnectionError), match="websocket not connected"):
         await t.send_command(CMD_TICK_PUSH)
 
 

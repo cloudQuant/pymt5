@@ -1,23 +1,25 @@
 """Market data mixin for MT5WebClient.
 
-Provides symbol management, tick/bar data retrieval, order book
-subscriptions, and currency conversion rate resolution.
+Provides symbol management, tick/bar data retrieval, and order book
+subscriptions. Currency conversion and profit/margin calculations
+are in :mod:`pymt5._currency`.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import struct
+import time
 import zlib
 from datetime import datetime
 from typing import TYPE_CHECKING, TypeVar
 
+from pymt5._currency import _CurrencyMixin
+from pymt5._logging import get_logger
 from pymt5._parsers import (
     _coerce_timestamp,
     _coerce_timestamp_ms,
     _coerce_timestamp_ms_end,
-    _currencies_equal,
     _history_lookback_seconds,
     _matches_group_mask,
     _normalize_full_symbol_record,
@@ -27,6 +29,7 @@ from pymt5._parsers import (
     _tick_matches_copy_flags,
     _to_copy_tick_record,
 )
+from pymt5._subscription import SubscriptionHandle
 from pymt5._validation import validate_symbol_name
 from pymt5.constants import (
     CMD_GET_FULL_SYMBOLS,
@@ -43,6 +46,7 @@ from pymt5.constants import (
     PROP_I32,
     PROP_U16,
 )
+from pymt5.exceptions import SymbolNotFoundError, ValidationError
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
     FULL_SYMBOL_FIELD_NAMES,
@@ -62,18 +66,15 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-logger = logging.getLogger("pymt5.client")
-
-FOREX_CALC_MODES = frozenset({0, 5})
-FUTURES_CALC_MODES = frozenset({1, 33, 34})
-CFD_CALC_MODES = frozenset({2, 3, 4, 32, 38})
-OPTION_CALC_MODES = frozenset({35, 36})
-BOND_CALC_MODES = frozenset({37, 39})
-COLLATERAL_CALC_MODE = 64
+logger = get_logger("pymt5.client")
 
 
-class _MarketDataMixin:
-    """Mixin providing market data methods for MT5WebClient."""
+class _MarketDataMixin(_CurrencyMixin):
+    """Mixin providing market data methods for MT5WebClient.
+
+    Inherits currency conversion and profit/margin calculations
+    from :class:`_CurrencyMixin`.
+    """
 
     # Attributes provided by MT5WebClient.__init__
     transport: MT5WebSocketTransport
@@ -89,14 +90,41 @@ class _MarketDataMixin:
     _book_cache_by_name: dict[str, Record]
     _subscribed_ids: list[int]
     _subscribed_book_ids: list[int]
+    _symbol_cache_ttl: float
+    _symbols_loaded_at: float
 
     if TYPE_CHECKING:
 
         def _fail_last_error(self, code: int, message: str) -> _T | None: ...
         def _clear_last_error(self) -> None: ...
 
+    def _is_symbol_cache_valid(self) -> bool:
+        """Check whether the symbol cache is still valid.
+
+        Returns ``True`` if the TTL is disabled (0) or if the cache has not
+        yet expired.
+        """
+        if self._symbol_cache_ttl <= 0:
+            return False
+        if self._symbols_loaded_at <= 0:
+            return False
+        elapsed = time.monotonic() - self._symbols_loaded_at
+        return elapsed < self._symbol_cache_ttl
+
+    def invalidate_symbol_cache(self) -> None:
+        """Force the symbol cache to be reloaded on the next ``load_symbols()`` call."""
+        self._symbols_loaded_at = 0.0
+
     async def load_symbols(self, use_gzip: bool = True) -> dict[str, SymbolInfo]:
-        """Load symbols and build internal cache for name->id lookup."""
+        """Load symbols and build internal cache for name->id lookup.
+
+        If a ``symbol_cache_ttl`` was configured and the cache is still
+        valid, the existing cache is returned without re-fetching from
+        the server.
+        """
+        if self._symbols and self._is_symbol_cache_valid():
+            logger.debug("symbol cache still valid, skipping reload")
+            return dict(self._symbols)
         raw = await self.get_symbols(use_gzip=use_gzip)
         self._symbols.clear()
         self._symbols_by_id.clear()
@@ -117,6 +145,7 @@ class _MarketDataMixin:
             history = self._tick_history_by_id.get(info.symbol_id)
             if history is not None:
                 self._tick_history_by_name[info.name] = history
+        self._symbols_loaded_at = time.monotonic()
         logger.info("symbol cache loaded: %d symbols", len(self._symbols))
         return dict(self._symbols)
 
@@ -329,7 +358,7 @@ class _MarketDataMixin:
             else:
                 ids.append(info.symbol_id)
         if missing:
-            raise ValueError(f"symbols not found in cache (call load_symbols first): {missing}")
+            raise SymbolNotFoundError(f"symbols not found in cache (call load_symbols first): {missing}")
         await self.subscribe_ticks(ids)
         return ids
 
@@ -365,7 +394,7 @@ class _MarketDataMixin:
             else:
                 ids.append(info.symbol_id)
         if missing:
-            raise ValueError(f"symbols not found in cache (call load_symbols first): {missing}")
+            raise SymbolNotFoundError(f"symbols not found in cache (call load_symbols first): {missing}")
         await self.subscribe_book(ids)
         return ids
 
@@ -384,6 +413,27 @@ class _MarketDataMixin:
             entry = self._book_cache_by_id.pop(symbol_id, None)
             if entry and entry.get("symbol"):
                 self._book_cache_by_name.pop(entry["symbol"], None)
+
+    async def subscribe_ticks_managed(self, symbol_ids: list[int]) -> SubscriptionHandle:
+        """Subscribe to tick updates and return a managed handle.
+
+        The returned :class:`SubscriptionHandle` can be used as an async
+        context manager to automatically unsubscribe on exit::
+
+            async with client.subscribe_ticks_managed([123]) as sub:
+                ...  # subscribed
+            # automatically unsubscribed
+        """
+        await self.subscribe_ticks(symbol_ids)
+        return SubscriptionHandle(symbol_ids, self.unsubscribe_ticks)
+
+    async def subscribe_book_managed(self, symbol_ids: list[int]) -> SubscriptionHandle:
+        """Subscribe to order book and return a managed handle.
+
+        Works the same as :meth:`subscribe_ticks_managed` but for book data.
+        """
+        await self.subscribe_book(symbol_ids)
+        return SubscriptionHandle(symbol_ids, self.unsubscribe_book)
 
     async def market_book_add(self, symbol: str) -> bool:
         """Official-style alias for subscribing to a symbol's DOM stream."""
@@ -511,7 +561,7 @@ class _MarketDataMixin:
     ) -> RecordList:
         """Best-effort current-bar-relative wrapper built on cmd=11 history."""
         if start_pos < 0:
-            raise ValueError(f"start_pos must be >= 0, got {start_pos}")
+            raise ValidationError(f"start_pos must be >= 0, got {start_pos}")
         if count <= 0:
             return []
         period_minutes = _normalize_timeframe_minutes(timeframe)
@@ -575,250 +625,5 @@ class _MarketDataMixin:
             return list(history)
         return []
 
-    async def _resolve_conversion_rates(
-        self,
-        *,
-        source: str,
-        target: str,
-        current_symbol: str,
-        fallback_rate: float,
-    ) -> tuple[float, float] | None:
-        if not source or not target:
-            return None
-        if _currencies_equal(source, target):
-            return 1.0, 1.0
-        buy = await self._resolve_side_rate(
-            source,
-            target,
-            prefer_ask_when_direct=True,
-            current_symbol=current_symbol,
-            fallback_rate=fallback_rate,
-        )
-        sell = await self._resolve_side_rate(
-            source,
-            target,
-            prefer_ask_when_direct=False,
-            current_symbol=current_symbol,
-            fallback_rate=fallback_rate,
-        )
-        if buy > 0.0 and sell > 0.0:
-            return buy, sell
-        buy_usd = await self._resolve_side_rate(
-            source,
-            "USD",
-            prefer_ask_when_direct=True,
-            current_symbol=current_symbol,
-            fallback_rate=fallback_rate,
-        )
-        sell_usd = await self._resolve_side_rate(
-            source,
-            "USD",
-            prefer_ask_when_direct=False,
-            current_symbol=current_symbol,
-            fallback_rate=fallback_rate,
-        )
-        buy_target = await self._resolve_side_rate(
-            "USD",
-            target,
-            prefer_ask_when_direct=True,
-            current_symbol=current_symbol,
-            fallback_rate=fallback_rate,
-        )
-        sell_target = await self._resolve_side_rate(
-            "USD",
-            target,
-            prefer_ask_when_direct=False,
-            current_symbol=current_symbol,
-            fallback_rate=fallback_rate,
-        )
-        if buy_usd > 0.0 and sell_usd > 0.0 and buy_target > 0.0 and sell_target > 0.0:
-            return buy_usd * buy_target, sell_usd * sell_target
-        return None
-
-    async def _resolve_side_rate(
-        self,
-        source: str,
-        target: str,
-        *,
-        prefer_ask_when_direct: bool,
-        current_symbol: str,
-        fallback_rate: float,
-    ) -> float:
-        direct = await self._find_conversion_symbol_name(source, target)
-        if direct is not None:
-            prices = self._get_conversion_prices(
-                direct,
-                current_symbol=current_symbol,
-                fallback_rate=fallback_rate,
-            )
-            if prices is not None:
-                bid, ask = prices
-                return ask if prefer_ask_when_direct else bid
-        inverse = await self._find_conversion_symbol_name(target, source)
-        if inverse is not None:
-            prices = self._get_conversion_prices(
-                inverse,
-                current_symbol=current_symbol,
-                fallback_rate=fallback_rate,
-            )
-            if prices is not None:
-                bid, ask = prices
-                denominator = bid if prefer_ask_when_direct else ask
-                if denominator > 0.0:
-                    return 1.0 / denominator
-        return 0.0
-
-    async def _find_conversion_symbol_name(self, base: str, quote: str) -> str | None:
-        if not base or not quote:
-            return None
-        if not self._symbols:
-            try:
-                await self.load_symbols()
-            except (RuntimeError, struct.error, KeyError, ValueError) as exc:
-                logger.debug("load_symbols() failed in _find_conversion_symbol_name: %s", exc)
-                return None
-        direct = f"{base}{quote}"
-        if direct in self._symbols:
-            return direct
-        matches = sorted(name for name in self._symbols if name.startswith(base) and name.endswith(quote))
-        if matches:
-            return matches[0]
-        return None
-
-    def _get_conversion_prices(
-        self,
-        symbol_name: str,
-        *,
-        current_symbol: str,
-        fallback_rate: float,
-    ) -> tuple[float, float] | None:
-        tick = self._tick_cache_by_name.get(symbol_name)
-        bid = 0.0
-        ask = 0.0
-        if tick is not None:
-            bid = float(tick.get("bid", 0.0) or 0.0)
-            ask = float(tick.get("ask", 0.0) or 0.0)
-        if symbol_name == current_symbol and fallback_rate > 0.0:
-            if bid <= 0.0:
-                bid = float(fallback_rate)
-            if ask <= 0.0:
-                ask = float(fallback_rate)
-        if bid <= 0.0:
-            bid = ask
-        if ask <= 0.0:
-            ask = bid
-        if bid > 0.0 and ask > 0.0:
-            return bid, ask
-        return None
-
-    def _calc_profit_raw(
-        self,
-        info: Record,
-        is_buy: bool,
-        volume: float,
-        price_open: float,
-        price_close: float,
-    ) -> float | None:
-        mode = int(info.get("trade_calc_mode", 0) or 0)
-        if mode in BOND_CALC_MODES:
-            contract_size = float(info.get("contract_size", 0.0) or 0.0)
-            face_value = float(info.get("face_value", 0.0) or 0.0)
-            accrued_interest = float(info.get("accrued_interest", 0.0) or 0.0)
-            if contract_size <= 0.0 or face_value <= 0.0:
-                return self._fail_last_error(
-                    -10,
-                    f"trade_calc_mode={mode} requires contract_size and face_value for bond profit calculation",
-                )
-            direction = 1.0 if is_buy else -1.0
-            open_value = (price_open / 100.0) * face_value
-            close_value = (price_close / 100.0) * face_value + accrued_interest
-            return direction * (close_value - open_value) * contract_size * float(volume)
-        if mode == COLLATERAL_CALC_MODE:
-            return 0.0
-        direction = 1.0 if is_buy else -1.0
-        contract_size = float(info.get("contract_size", 0.0) or 0.0)
-        tick_size = float(info.get("tick_size", 0.0) or 0.0)
-        tick_value = float(info.get("tick_value", 0.0) or 0.0)
-        if mode in FOREX_CALC_MODES or mode in CFD_CALC_MODES:
-            if contract_size <= 0.0:
-                return self._fail_last_error(-11, "contract_size must be > 0 for profit calculation")
-            return direction * (price_close - price_open) * contract_size * float(volume)
-        if mode in {1, 33, 35, 36}:
-            if tick_value <= 0.0:
-                return self._fail_last_error(-12, "tick_value must be > 0 for futures/options profit calculation")
-            point_value = tick_value / tick_size if tick_size > 0.0 else tick_value
-            return direction * (price_close - price_open) * float(volume) * point_value
-        if mode == 34:
-            if tick_value <= 0.0:
-                return self._fail_last_error(-12, "tick_value must be > 0 for FORTS profit calculation")
-            open_value = price_open * tick_value / tick_size if tick_size > 0.0 else price_open * tick_value
-            close_value = price_close * tick_value / tick_size if tick_size > 0.0 else price_close * tick_value
-            return direction * (close_value - open_value) * float(volume)
-        if contract_size <= 0.0:
-            return self._fail_last_error(-11, "contract_size must be > 0 for profit calculation")
-        return direction * (price_close - price_open) * contract_size * float(volume)
-
-    def _calc_margin_raw(
-        self,
-        info: Record,
-        is_buy: bool,
-        volume: float,
-        price: float,
-        leverage: int,
-    ) -> float | None:
-        del is_buy
-        mode = int(info.get("trade_calc_mode", 0) or 0)
-        contract_size = float(info.get("contract_size", 0.0) or 0.0)
-        tick_size = float(info.get("tick_size", 0.0) or 0.0)
-        tick_value = float(info.get("tick_value", 0.0) or 0.0)
-        margin_initial = float(info.get("margin_initial", 0.0) or 0.0)
-        lots = float(volume)
-        units = lots * contract_size
-        if mode in BOND_CALC_MODES:
-            face_value = float(info.get("face_value", 0.0) or 0.0)
-            if contract_size <= 0.0 or face_value <= 0.0:
-                return self._fail_last_error(
-                    -13,
-                    f"trade_calc_mode={mode} requires contract_size and face_value for bond margin calculation",
-                )
-            return lots * contract_size * face_value * float(price) / 100.0
-        if mode == COLLATERAL_CALC_MODE:
-            return 0.0
-        if mode == 5:
-            if contract_size <= 0.0:
-                return self._fail_last_error(-14, "contract_size must be > 0 for margin calculation")
-            return units
-        if mode == 0 or mode == 4:
-            if contract_size <= 0.0:
-                return self._fail_last_error(-14, "contract_size must be > 0 for margin calculation")
-            if leverage <= 0:
-                return self._fail_last_error(-15, "account leverage must be > 0 for leveraged margin calculation")
-            base_margin = units / float(leverage)
-            if mode == 4:
-                base_margin *= float(price)
-            return base_margin
-        if mode in FUTURES_CALC_MODES:
-            if margin_initial > 0.0:
-                return lots * margin_initial
-            if tick_value <= 0.0:
-                return self._fail_last_error(
-                    -16,
-                    "margin_initial or tick_value is required for futures margin calculation",
-                )
-            point_value = tick_value / tick_size if tick_size > 0.0 else tick_value
-            return lots * float(price) * point_value
-        if mode == 3:
-            if contract_size <= 0.0 or tick_value <= 0.0:
-                return self._fail_last_error(
-                    -17,
-                    "contract_size and tick_value are required for CFD index margin calculation",
-                )
-            point_value = tick_value / tick_size if tick_size > 0.0 else tick_value
-            return units * float(price) * point_value
-        if mode in {2, 32, 35, 36, 38}:
-            if margin_initial > 0.0 and mode in {32, 35, 36, 38}:
-                return lots * margin_initial
-            if contract_size <= 0.0:
-                return self._fail_last_error(-14, "contract_size must be > 0 for margin calculation")
-            return units * float(price)
-        return self._fail_last_error(-18, f"trade_calc_mode={mode} is not supported yet")
+    # Currency conversion, profit, and margin methods are inherited
+    # from _CurrencyMixin (see pymt5/_currency.py)

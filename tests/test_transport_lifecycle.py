@@ -124,12 +124,12 @@ class TestConnect:
 
         with (
             patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws),
-            pytest.raises(RuntimeError, match="bootstrap failed: code=1"),
+            pytest.raises((RuntimeError, ConnectionError), match="bootstrap failed: code=1"),
         ):
             await t.connect()
 
     async def test_connect_bootstrap_short_body_raises(self):
-        """Bootstrap response with body < 66 bytes raises RuntimeError."""
+        """Bootstrap response with body < 66 bytes raises MT5ConnectionError."""
         t = MT5WebSocketTransport(uri="wss://example.com", timeout=5.0)
 
         short_body = b"\x00" * 10
@@ -140,7 +140,7 @@ class TestConnect:
 
         with (
             patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws),
-            pytest.raises(RuntimeError, match="bootstrap response too short"),
+            pytest.raises((RuntimeError, ConnectionError), match="bootstrap response too short"),
         ):
             await t.connect()
 
@@ -300,11 +300,11 @@ class TestSendCommand:
             await t.send_command(CMD_GET_ACCOUNT)
 
     async def test_send_command_no_ws_raises(self):
-        """send_command() raises RuntimeError when ws is None."""
+        """send_command() raises MT5ConnectionError when ws is None."""
         t = MT5WebSocketTransport(uri="wss://example.com")
         t.is_ready = True
         t.ws = None
-        with pytest.raises(RuntimeError, match="websocket not connected"):
+        with pytest.raises((RuntimeError, ConnectionError), match="websocket not connected"):
             await t.send_command(CMD_GET_ACCOUNT)
 
     async def test_send_command_creates_pending_future(self):
@@ -407,11 +407,11 @@ class TestSendRaw:
             await t._send_raw(CMD_GET_ACCOUNT, b"", check_ready=True)
 
     async def test_send_raw_ws_none_raises(self):
-        """_send_raw() raises RuntimeError when ws is None."""
+        """_send_raw() raises MT5ConnectionError when ws is None."""
         t = MT5WebSocketTransport(uri="wss://example.com")
         t.is_ready = False
         t.ws = None
-        with pytest.raises(RuntimeError, match="websocket not connected"):
+        with pytest.raises((RuntimeError, ConnectionError), match="websocket not connected"):
             await t._send_raw(CMD_BOOTSTRAP, b"", check_ready=False)
 
     async def test_send_raw_timeout_cleans_leaked_future(self):

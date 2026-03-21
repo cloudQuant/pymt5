@@ -6,11 +6,11 @@ coercion, and validation logic used by the client mixins.
 
 from __future__ import annotations
 
-import logging
 import struct
 from datetime import datetime
 from fnmatch import fnmatchcase
 
+from pymt5._logging import get_logger
 from pymt5.constants import (
     COPY_TICKS_ALL,
     COPY_TICKS_INFO,
@@ -53,7 +53,7 @@ from pymt5.types import (
     VerificationStatus,
 )
 
-logger = logging.getLogger("pymt5.client")
+logger = get_logger("pymt5.client")
 
 # Import constants needed for specific functions
 PERIOD_MINUTES_MAP = {code: minutes for minutes, code in PERIOD_MAP.items()}

@@ -7,9 +7,14 @@ try:
     from importlib.metadata import version as _pkg_version
 
     __version__ = _pkg_version("pymt5")
-except Exception:
-    __version__ = "0.7.0"
+except ImportError:
+    __version__ = "0.9.0"
 
+from pymt5._dataframe import to_dataframe
+from pymt5._metrics import MetricsCollector
+from pymt5._order_manager import OrderManager, OrderState, PositionSummary, TrackedOrder
+from pymt5._pool import MT5ConnectionPool, PoolAccount
+from pymt5._subscription import SubscriptionHandle
 from pymt5.client import (
     AccountDocument,
     AccountInfo,
@@ -117,6 +122,7 @@ from pymt5.constants import (
     TRADE_RETCODE_DONE_PARTIAL,
     TRADE_RETCODE_PLACED,
 )
+from pymt5.events import AccountEvent, BookEvent, HealthStatus, TickEvent, TradeResultEvent
 from pymt5.exceptions import (
     AuthenticationError,
     MT5ConnectionError,
@@ -128,6 +134,7 @@ from pymt5.exceptions import (
     TradeError,
     ValidationError,
 )
+from pymt5.transport import TransportState
 
 __all__ = [
     "MT5WebClient",
@@ -243,4 +250,26 @@ __all__ = [
     "TRADE_RETCODE_DONE",
     "TRADE_RETCODE_DONE_PARTIAL",
     "TRADE_RETCODE_PLACED",
+    # Transport
+    "TransportState",
+    # Subscriptions
+    "SubscriptionHandle",
+    # DataFrame integration
+    "to_dataframe",
+    # Events
+    "TickEvent",
+    "BookEvent",
+    "TradeResultEvent",
+    "AccountEvent",
+    "HealthStatus",
+    # Metrics
+    "MetricsCollector",
+    # Order Manager
+    "OrderManager",
+    "OrderState",
+    "TrackedOrder",
+    "PositionSummary",
+    # Connection Pool
+    "MT5ConnectionPool",
+    "PoolAccount",
 ]

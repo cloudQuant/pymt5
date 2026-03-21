@@ -6,10 +6,10 @@ account opening, OTP setup, notifications, and corporate links.
 
 from __future__ import annotations
 
-import logging
 import struct
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from pymt5._logging import get_logger
 from pymt5._parsers import (
     _parse_account_response,
     _parse_counted_records,
@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-logger = logging.getLogger("pymt5.client")
+logger = get_logger("pymt5.client")
 
 MT5_TERMINAL_VERSION = 500
 OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES = {

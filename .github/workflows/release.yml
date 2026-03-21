@@ -1,0 +1,53 @@
+name: Release to PyPI
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - name: Run tests
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin tests/ -v --tb=short
+      - run: ruff check pymt5/ tests/
+      - run: python -m mypy pymt5/ --ignore-missing-imports
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build twine
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

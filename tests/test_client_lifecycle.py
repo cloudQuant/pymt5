@@ -14,6 +14,7 @@ import pytest
 
 from pymt5.client import MT5WebClient
 from pymt5.constants import CMD_LOGIN, CMD_LOGOUT, CMD_PING
+from pymt5.exceptions import MT5ConnectionError, SessionError
 from pymt5.transport import CommandResult
 
 # ---------------------------------------------------------------------------
@@ -319,7 +320,7 @@ async def test_heartbeat_loop_handles_ping_failure():
         nonlocal call_count
         call_count += 1
         if call_count <= 2:
-            raise RuntimeError("network error")
+            raise MT5ConnectionError("network error")
         return _ok_result(CMD_PING)
 
     client.transport.send_command = AsyncMock(side_effect=_failing_ping)
@@ -466,7 +467,7 @@ async def test_reconnect_loop_all_attempts_exhausted():
 
     # Make every reconnect attempt fail
     failing_transport = MagicMock()
-    failing_transport.connect = AsyncMock(side_effect=RuntimeError("refused"))
+    failing_transport.connect = AsyncMock(side_effect=MT5ConnectionError("refused"))
     failing_transport.close = AsyncMock()
     failing_transport._on_disconnect = None
     failing_transport._listeners = {}
@@ -495,7 +496,7 @@ async def test_reconnect_loop_succeeds_on_second_attempt():
 
     login_body = _make_login_body()
 
-    def _make_transport(uri, timeout=30.0):
+    def _make_transport(uri, timeout=30.0, **_kwargs):
         nonlocal attempt_count
         attempt_count += 1
         t = MagicMock()
@@ -504,7 +505,7 @@ async def test_reconnect_loop_succeeds_on_second_attempt():
         t.on = MagicMock()
         t.close = AsyncMock()
         if attempt_count == 1:
-            t.connect = AsyncMock(side_effect=RuntimeError("timeout"))
+            t.connect = AsyncMock(side_effect=MT5ConnectionError("timeout"))
         else:
             t.connect = AsyncMock()
             t.is_ready = True
@@ -568,10 +569,10 @@ async def test_reconnect_loop_closes_old_transport_even_on_error():
     client._login_kwargs = {"login": 1, "password": "x"}
     # Save reference to the old transport before it gets replaced
     old_transport = client.transport
-    old_transport.close = AsyncMock(side_effect=RuntimeError("already closed"))
+    old_transport.close = AsyncMock(side_effect=SessionError("already closed"))
 
     failing_transport = MagicMock()
-    failing_transport.connect = AsyncMock(side_effect=RuntimeError("fail"))
+    failing_transport.connect = AsyncMock(side_effect=MT5ConnectionError("fail"))
     failing_transport.close = AsyncMock()
     failing_transport._on_disconnect = None
     failing_transport._listeners = {}

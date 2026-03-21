@@ -867,7 +867,7 @@ async def test_subscribe_book_by_name():
 async def test_subscribe_book_by_name_missing_raises():
     """subscribe_book_by_name raises ValueError for missing symbols."""
     client = _make_client_with_symbols()
-    with pytest.raises(ValueError, match="symbols not found in cache"):
+    with pytest.raises((ValueError, KeyError), match="symbols not found in cache"):
         await client.subscribe_book_by_name(["EURUSD", "NOSYMBOL"])
 
 

@@ -362,7 +362,7 @@ def test_subscribe_symbols_missing_raises():
     client = MT5WebClient()
     import asyncio
 
-    with pytest.raises(ValueError, match="symbols not found in cache"):
+    with pytest.raises((ValueError, KeyError), match="symbols not found in cache"):
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(client.subscribe_symbols(["NOSYMBOL"]))
@@ -992,7 +992,7 @@ def test_subscribe_book_by_name_missing_raises():
     client = MT5WebClient()
     import asyncio
 
-    with pytest.raises(ValueError, match="symbols not found in cache"):
+    with pytest.raises((ValueError, KeyError), match="symbols not found in cache"):
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(client.subscribe_book_by_name(["NOSYMBOL"]))

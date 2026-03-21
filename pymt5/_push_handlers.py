@@ -7,7 +7,6 @@ updates, login status, book updates, and trade results.
 
 from __future__ import annotations
 
-import logging
 import struct
 from collections import deque
 from collections.abc import Callable
@@ -25,6 +24,7 @@ from pymt5.constants import (
     CMD_TRADE_RESULT_PUSH,
     CMD_TRADE_UPDATE_PUSH,
 )
+from pymt5.events import AccountEvent, BookEvent, TickEvent, TradeResultEvent
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
     DEAL_FIELD_NAMES,
@@ -51,7 +51,9 @@ if TYPE_CHECKING:
     from pymt5.transport import MT5WebSocketTransport
     from pymt5.types import SymbolInfo
 
-logger = logging.getLogger("pymt5.client")
+from pymt5._logging import get_logger
+
+logger = get_logger("pymt5.client")
 
 # Specific exceptions for push handler parsing failures
 _PARSE_ERRORS = (struct.error, KeyError, ValueError, TypeError, IndexError)
@@ -70,6 +72,13 @@ class _PushHandlersMixin:
     _tick_history_by_name: dict[str, deque[Record]]
     _book_cache_by_id: dict[int, Record]
     _book_cache_by_name: dict[str, Record]
+    # Typed handler lists (Phase 16.1)
+    _typed_tick_handlers: list[Callable]
+    _typed_book_handlers: list[Callable]
+    _typed_trade_result_handlers: list[Callable]
+    _typed_account_handlers: list[Callable]
+    # Callback error handlers (Phase 16.2)
+    _callback_error_handlers: list[Callable]
 
     def on_tick(self, callback: Callable[[RecordList], None]) -> Callable:
         def _handler(result: CommandResult) -> None:
@@ -303,6 +312,124 @@ class _PushHandlersMixin:
 
         self.transport.on(CMD_BOOK_PUSH, _handler)
         return _handler
+
+    # ---- Typed push handler registration (Phase 16.1) ----
+
+    def on_tick_event(self, callback: Callable[[TickEvent], None]) -> Callable:
+        """Register a typed callback that receives :class:`TickEvent` objects.
+
+        Unlike :meth:`on_tick` which passes a raw ``RecordList``, this
+        handler converts each tick into a frozen :class:`TickEvent` dataclass.
+        """
+
+        def _handler(result: CommandResult) -> None:
+            try:
+                ticks = _parse_tick_batch(result.body, self._symbols_by_id)
+                for tick in ticks:
+                    event = TickEvent(
+                        symbol_id=int(tick.get("symbol_id", 0)),
+                        symbol=str(tick.get("symbol", "")),
+                        bid=float(tick.get("bid", 0.0)),
+                        ask=float(tick.get("ask", 0.0)),
+                        last=float(tick.get("last", 0.0)),
+                        volume=float(tick.get("tick_volume", 0)),
+                        timestamp=float(tick.get("tick_time_ms", 0) or tick.get("tick_time", 0)),
+                        raw=tick,
+                    )
+                    callback(event)
+            except _PARSE_ERRORS as exc:
+                logger.error("typed tick event parse error: %s", exc)
+
+        self.transport.on(CMD_TICK_PUSH, _handler)
+        self._typed_tick_handlers.append(callback)
+        return _handler
+
+    def on_book_event(self, callback: Callable[[BookEvent], None]) -> Callable:
+        """Register a typed callback that receives :class:`BookEvent` objects."""
+
+        def _handler(result: CommandResult) -> None:
+            try:
+                entries = _parse_book_entries(result.body, self._symbols_by_id)
+                for entry in entries:
+                    event = BookEvent(
+                        symbol_id=int(entry.get("symbol_id", 0)),
+                        symbol=str(entry.get("symbol", "")),
+                        entries=entry.get("bids", []) + entry.get("asks", []),
+                        raw=entry,
+                    )
+                    callback(event)
+            except _PARSE_ERRORS as exc:
+                logger.error("typed book event parse error: %s", exc)
+
+        self.transport.on(CMD_BOOK_PUSH, _handler)
+        self._typed_book_handlers.append(callback)
+        return _handler
+
+    def on_trade_result_event(self, callback: Callable[[TradeResultEvent], None]) -> Callable:
+        """Register a typed callback that receives :class:`TradeResultEvent` objects."""
+
+        def _handler(result: CommandResult) -> None:
+            try:
+                body = result.body
+                action_size = get_series_size(TRADE_RESULT_PUSH_SCHEMA)
+                resp_size = get_series_size(TRADE_RESULT_RESPONSE_SCHEMA)
+                data: dict[str, Any] = {}
+                if len(body) >= action_size:
+                    vals = SeriesCodec.parse(body, TRADE_RESULT_PUSH_SCHEMA)
+                    data.update(zip(TRADE_RESULT_PUSH_FIELD_NAMES, vals))
+                if len(body) >= action_size + resp_size:
+                    resp_vals = SeriesCodec.parse_at(body, TRADE_RESULT_RESPONSE_SCHEMA, action_size)
+                    data["result"] = dict(zip(TRADE_RESULT_RESPONSE_FIELD_NAMES, resp_vals))
+                result_data = data.get("result", {})
+                event = TradeResultEvent(
+                    retcode=int(result_data.get("retcode", 0)),
+                    order=int(result_data.get("order", 0)),
+                    deal=int(result_data.get("deal", 0)),
+                    volume=float(result_data.get("volume", 0)),
+                    price=float(result_data.get("price", 0.0)),
+                    comment=str(result_data.get("comment", "")),
+                    raw=data,
+                )
+                callback(event)
+            except _PARSE_ERRORS as exc:
+                logger.error("typed trade result event parse error: %s", exc)
+
+        self.transport.on(CMD_TRADE_RESULT_PUSH, _handler)
+        self._typed_trade_result_handlers.append(callback)
+        return _handler
+
+    def on_account_event(self, callback: Callable[[AccountEvent], None]) -> Callable:
+        """Register a typed callback that receives :class:`AccountEvent` objects."""
+
+        def _handler(result: CommandResult) -> None:
+            try:
+                data = _parse_account_response(result.body)
+                if not data:
+                    return
+                event = AccountEvent(
+                    balance=float(data.get("balance", 0.0)),
+                    equity=float(data.get("equity", 0.0)),
+                    margin=float(data.get("margin", 0.0)),
+                    margin_free=float(data.get("margin_free", 0.0)),
+                    raw=data,
+                )
+                callback(event)
+            except _PARSE_ERRORS as exc:
+                logger.error("typed account event parse error: %s", exc)
+
+        self.transport.on(CMD_ACCOUNT_UPDATE_PUSH, _handler)
+        self._typed_account_handlers.append(callback)
+        return _handler
+
+    # ---- Callback error registration (Phase 16.2) ----
+
+    def on_callback_error(self, callback: Callable[[Exception, Callable], None]) -> None:
+        """Register a handler that is invoked when a push callback raises.
+
+        The handler receives the exception and the failing callback.
+        """
+        self._callback_error_handlers.append(callback)
+        self.transport._callback_error_handlers.append(callback)
 
     def _cache_tick_push(self, result: CommandResult) -> None:
         try:

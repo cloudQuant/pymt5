@@ -6,11 +6,11 @@ retrieval, and order validation.
 
 from __future__ import annotations
 
-import logging
 import struct
 from datetime import datetime
 from typing import TYPE_CHECKING, TypeVar
 
+from pymt5._logging import get_logger
 from pymt5._parsers import (
     _coerce_optional_timestamp,
     _currencies_equal,
@@ -20,7 +20,6 @@ from pymt5._parsers import (
     _validate_requested_stops,
     _validate_requested_volume,
 )
-from pymt5._validation import validate_symbol_name, validate_volume
 from pymt5.constants import (
     CMD_GET_POSITIONS_ORDERS,
     CMD_GET_TRADE_HISTORY,
@@ -29,15 +28,8 @@ from pymt5.constants import (
     ORDER_TIME_GTC,
     ORDER_TIME_SPECIFIED,
     ORDER_TIME_SPECIFIED_DAY,
-    ORDER_TYPE_BUY,
-    ORDER_TYPE_BUY_LIMIT,
-    ORDER_TYPE_BUY_STOP,
     ORDER_TYPE_BUY_STOP_LIMIT,
-    ORDER_TYPE_SELL,
-    ORDER_TYPE_SELL_LIMIT,
-    ORDER_TYPE_SELL_STOP,
     ORDER_TYPE_SELL_STOP_LIMIT,
-    POSITION_TYPE_SELL,
     PROP_F64,
     PROP_FIXED_STRING,
     PROP_U32,
@@ -62,6 +54,7 @@ from pymt5.constants import (
     TRADE_RETCODE_PLACED,
     TRADE_RETCODE_TRADE_DISABLED,
 )
+from pymt5.exceptions import ValidationError
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
     DEAL_FIELD_NAMES,
@@ -84,7 +77,7 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
-logger = logging.getLogger("pymt5.client")
+logger = get_logger("pymt5.client")
 
 
 class _TradingMixin:
@@ -126,6 +119,9 @@ class _TradingMixin:
             current_symbol: str,
             fallback_rate: float,
         ) -> tuple[float, float] | None: ...
+        def _resolve_digits(self, symbol: str, digits: int | None) -> int: ...
+        @staticmethod
+        def _volume_to_lots(volume: float, precision: int = 8) -> int: ...
 
     async def get_positions_and_orders(self) -> dict[str, RecordList]:
         result = await self.transport.send_command(CMD_GET_POSITIONS_ORDERS)
@@ -312,7 +308,7 @@ class _TradingMixin:
                     f"unable to convert profit currency {profit_currency} to {account_currency}",
                 )
             rate_buy, rate_sell = rates
-            from pymt5._market_data import FOREX_CALC_MODES
+            from pymt5.constants import FOREX_CALC_MODES
 
             mode = int(info.get("trade_calc_mode", 0) or 0)
             if mode in FOREX_CALC_MODES:
@@ -397,9 +393,9 @@ class _TradingMixin:
         time_expiration: int = 0,
     ) -> TradeResult:
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_PENDING) and volume <= 0:
-            raise ValueError(f"volume must be > 0 for trade_action={trade_action}, got {volume}")
+            raise ValidationError(f"volume must be > 0 for trade_action={trade_action}, got {volume}")
         if trade_action == TRADE_ACTION_PENDING and price_order <= 0.0:
-            raise ValueError(f"price_order must be > 0 for pending orders, got {price_order}")
+            raise ValidationError(f"price_order must be > 0 for pending orders, got {price_order}")
         payload = SeriesCodec.serialize(
             [
                 (PROP_U32, action_id),
@@ -553,53 +549,67 @@ class _TradingMixin:
             "comment": str(request.get("comment", "") or ""),
         }
 
-    async def _validate_order_check_request(self, request: Record) -> tuple[int, str]:
-        action = int(request.get("action", 0) or 0)
+    async def _validate_deal_or_pending(
+        self, request: Record, symbol_info: dict | None,
+    ) -> tuple[int, str] | None:
+        """Validate fields for DEAL/PENDING actions.
+
+        Returns ``(retcode, message)`` on validation failure, ``None`` on success.
+        """
         symbol = str(request.get("symbol", "") or "")
         order_type = int(request.get("type", 0) or 0)
         volume = float(request.get("volume", 0.0) or 0.0)
+        action = int(request.get("action", 0) or 0)
+        if not symbol:
+            return TRADE_RETCODE_INVALID, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID]
+        if symbol_info is None:
+            return TRADE_RETCODE_INVALID, f"symbol not found: {symbol}"
+        if volume <= 0.0:
+            return TRADE_RETCODE_INVALID_VOLUME, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_VOLUME]
+        if _order_side(order_type) is None:
+            return TRADE_RETCODE_INVALID_ORDER, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_ORDER]
+        trade_mode = int(symbol_info.get("trade_mode", 0) or 0)
+        if trade_mode == 0:
+            return TRADE_RETCODE_TRADE_DISABLED, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_TRADE_DISABLED]
+        side = _order_side(order_type)
+        if trade_mode == 1 and side is False:
+            return TRADE_RETCODE_INVALID_ORDER, "symbol is long-only"
+        if trade_mode == 2 and side is True:
+            return TRADE_RETCODE_INVALID_ORDER, "symbol is short-only"
+        if trade_mode == 3:
+            return TRADE_RETCODE_TRADE_DISABLED, "symbol is close-only"
+        volume_check = _validate_requested_volume(symbol_info, volume)
+        if volume_check is not None:
+            return TRADE_RETCODE_INVALID_VOLUME, volume_check
+        expiration = int(request.get("expiration", 0) or 0)
+        type_time = int(request.get("type_time", ORDER_TIME_GTC) or 0)
+        if type_time in {ORDER_TIME_SPECIFIED, ORDER_TIME_SPECIFIED_DAY} and expiration <= 0:
+            return (
+                TRADE_RETCODE_INVALID_EXPIRATION,
+                TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_EXPIRATION],
+            )
+        fill_flags = int(symbol_info.get("filling_mode", 0) or 0)
+        type_filling = int(request.get("type_filling", ORDER_FILLING_FOK) or 0)
+        if fill_flags and type_filling not in {0, 1, 2}:
+            return TRADE_RETCODE_INVALID_FILL, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_FILL]
+        price_check = await self._resolve_order_check_price(request, symbol_info)
+        if price_check <= 0.0:
+            return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
+        if action == TRADE_ACTION_PENDING and float(request.get("price_order", 0.0) or 0.0) <= 0.0:
+            return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
+        stops_error = _validate_requested_stops(symbol_info, request, price_check)
+        if stops_error is not None:
+            return TRADE_RETCODE_INVALID_STOPS, stops_error
+        return None
+
+    async def _validate_order_check_request(self, request: Record) -> tuple[int, str]:
+        action = int(request.get("action", 0) or 0)
+        symbol = str(request.get("symbol", "") or "")
         symbol_info = await self.symbol_info(symbol) if symbol else None
         if action in {TRADE_ACTION_DEAL, TRADE_ACTION_PENDING}:
-            if not symbol:
-                return TRADE_RETCODE_INVALID, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID]
-            if symbol_info is None:
-                return TRADE_RETCODE_INVALID, f"symbol not found: {symbol}"
-            if volume <= 0.0:
-                return TRADE_RETCODE_INVALID_VOLUME, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_VOLUME]
-            if _order_side(order_type) is None:
-                return TRADE_RETCODE_INVALID_ORDER, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_ORDER]
-            trade_mode = int(symbol_info.get("trade_mode", 0) or 0)
-            if trade_mode == 0:
-                return TRADE_RETCODE_TRADE_DISABLED, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_TRADE_DISABLED]
-            side = _order_side(order_type)
-            if trade_mode == 1 and side is False:
-                return TRADE_RETCODE_INVALID_ORDER, "symbol is long-only"
-            if trade_mode == 2 and side is True:
-                return TRADE_RETCODE_INVALID_ORDER, "symbol is short-only"
-            if trade_mode == 3:
-                return TRADE_RETCODE_TRADE_DISABLED, "symbol is close-only"
-            volume_check = _validate_requested_volume(symbol_info, volume)
-            if volume_check is not None:
-                return TRADE_RETCODE_INVALID_VOLUME, volume_check
-            expiration = int(request.get("expiration", 0) or 0)
-            type_time = int(request.get("type_time", ORDER_TIME_GTC) or 0)
-            if type_time in {ORDER_TIME_SPECIFIED, ORDER_TIME_SPECIFIED_DAY} and expiration <= 0:
-                return (
-                    TRADE_RETCODE_INVALID_EXPIRATION,
-                    TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_EXPIRATION],
-                )
-            fill_flags = int(symbol_info.get("filling_mode", 0) or 0)
-            type_filling = int(request.get("type_filling", ORDER_FILLING_FOK) or 0)
-            if fill_flags and type_filling not in {0, 1, 2}:
-                return TRADE_RETCODE_INVALID_FILL, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_FILL]
-            price_check = await self._resolve_order_check_price(request, symbol_info)
-            if price_check <= 0.0:
-                return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
-            if action == TRADE_ACTION_PENDING and float(request.get("price_order", 0.0) or 0.0) <= 0.0:
-                return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
-            stops_error = _validate_requested_stops(symbol_info, request, price_check)
-            if stops_error is not None:
-                return TRADE_RETCODE_INVALID_STOPS, stops_error
+            result = await self._validate_deal_or_pending(request, symbol_info)
+            if result is not None:
+                return result
         elif action == TRADE_ACTION_SLTP:
             if int(request.get("position", 0) or 0) <= 0:
                 return TRADE_RETCODE_INVALID, "position is required for SLTP modification"
@@ -689,451 +699,3 @@ class _TradingMixin:
         logger.info("trade_request %s action=%d vol=%d -> %s", symbol, trade_action, volume, tr)
         return tr
 
-    # ---- High-Level Trading Helpers ----
-
-    def _resolve_digits(self, symbol: str, digits: int | None) -> int:
-        """Resolve digits from cache or explicit parameter."""
-        if digits is not None:
-            return digits
-        info = self._symbols.get(symbol)
-        return info.digits if info else 5
-
-    @staticmethod
-    def _volume_to_lots(volume: float, precision: int = 8) -> int:
-        """Convert lots (e.g. 0.01) to MT5 integer volume.
-
-        MT5 Web Terminal uses integer volumes where the value represents
-        volume * 10^precision. The default precision=8 is based on the
-        MetaQuotes demo server (1.0 lot = 100000000).
-        """
-        return int(round(volume * (10**precision)))
-
-    async def _place_order(
-        self,
-        *,
-        trade_action: int,
-        symbol: str,
-        volume: float,
-        trade_type: int,
-        digits: int | None = None,
-        price: float = 0.0,
-        trigger_price: float = 0.0,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        deviation: int = 0,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Internal helper for all order placement methods."""
-        validate_symbol_name(symbol)
-        if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_PENDING):
-            validate_volume(volume)
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=trade_action,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=trade_type,
-            type_filling=filling,
-            type_time=time_type,
-            price_order=price,
-            price_trigger=trigger_price,
-            price_sl=sl,
-            price_tp=tp,
-            deviation=deviation,
-            comment=comment,
-            time_expiration=expiration,
-            type_reason=magic,
-        )
-
-    async def buy_market(
-        self,
-        symbol: str,
-        volume: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        deviation: int = 20,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a market buy order."""
-        return await self._place_order(
-            trade_action=TRADE_ACTION_DEAL,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_BUY,
-            digits=digits,
-            sl=sl,
-            tp=tp,
-            deviation=deviation,
-            comment=comment,
-            filling=filling,
-            magic=magic,
-        )
-
-    async def sell_market(
-        self,
-        symbol: str,
-        volume: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        deviation: int = 20,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a market sell order."""
-        return await self._place_order(
-            trade_action=TRADE_ACTION_DEAL,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_SELL,
-            digits=digits,
-            sl=sl,
-            tp=tp,
-            deviation=deviation,
-            comment=comment,
-            filling=filling,
-            magic=magic,
-        )
-
-    async def buy_limit(
-        self,
-        symbol: str,
-        volume: float,
-        price: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a buy limit pending order."""
-        return await self._place_order(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_BUY_LIMIT,
-            digits=digits,
-            price=price,
-            sl=sl,
-            tp=tp,
-            comment=comment,
-            filling=filling,
-            time_type=time_type,
-            expiration=expiration,
-            magic=magic,
-        )
-
-    async def sell_limit(
-        self,
-        symbol: str,
-        volume: float,
-        price: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a sell limit pending order."""
-        return await self._place_order(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_SELL_LIMIT,
-            digits=digits,
-            price=price,
-            sl=sl,
-            tp=tp,
-            comment=comment,
-            filling=filling,
-            time_type=time_type,
-            expiration=expiration,
-            magic=magic,
-        )
-
-    async def buy_stop(
-        self,
-        symbol: str,
-        volume: float,
-        price: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a buy stop pending order."""
-        return await self._place_order(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_BUY_STOP,
-            digits=digits,
-            price=price,
-            sl=sl,
-            tp=tp,
-            comment=comment,
-            filling=filling,
-            time_type=time_type,
-            expiration=expiration,
-            magic=magic,
-        )
-
-    async def sell_stop(
-        self,
-        symbol: str,
-        volume: float,
-        price: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a sell stop pending order."""
-        return await self._place_order(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_SELL_STOP,
-            digits=digits,
-            price=price,
-            sl=sl,
-            tp=tp,
-            comment=comment,
-            filling=filling,
-            time_type=time_type,
-            expiration=expiration,
-            magic=magic,
-        )
-
-    async def buy_stop_limit(
-        self,
-        symbol: str,
-        volume: float,
-        price: float,
-        stop_limit_price: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a buy stop limit pending order.
-
-        Args:
-            price: Stop trigger price (price_trigger).
-            stop_limit_price: Limit price placed after stop triggers (price_order).
-        """
-        return await self._place_order(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_BUY_STOP_LIMIT,
-            digits=digits,
-            price=stop_limit_price,
-            trigger_price=price,
-            sl=sl,
-            tp=tp,
-            comment=comment,
-            filling=filling,
-            time_type=time_type,
-            expiration=expiration,
-            magic=magic,
-        )
-
-    async def sell_stop_limit(
-        self,
-        symbol: str,
-        volume: float,
-        price: float,
-        stop_limit_price: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Place a sell stop limit pending order.
-
-        Args:
-            price: Stop trigger price (price_trigger).
-            stop_limit_price: Limit price placed after stop triggers (price_order).
-        """
-        return await self._place_order(
-            trade_action=TRADE_ACTION_PENDING,
-            symbol=symbol,
-            volume=volume,
-            trade_type=ORDER_TYPE_SELL_STOP_LIMIT,
-            digits=digits,
-            price=stop_limit_price,
-            trigger_price=price,
-            sl=sl,
-            tp=tp,
-            comment=comment,
-            filling=filling,
-            time_type=time_type,
-            expiration=expiration,
-            magic=magic,
-        )
-
-    async def close_position(
-        self,
-        symbol: str,
-        position_id: int,
-        volume: float,
-        *,
-        order_type: int | None = None,
-        deviation: int = 20,
-        comment: str = "",
-        filling: int = ORDER_FILLING_FOK,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Close a position by placing an opposite market order.
-
-        If order_type is not specified, auto-detects direction from open positions:
-        BUY positions are closed with SELL and vice versa. Falls back to SELL if
-        the position is not found in the current position list.
-        """
-        d = self._resolve_digits(symbol, digits)
-        if order_type is not None:
-            ot = order_type
-        else:
-            ot = await self._detect_close_direction(position_id)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_DEAL,
-            symbol=symbol,
-            volume=self._volume_to_lots(volume),
-            digits=d,
-            trade_type=ot,
-            type_filling=filling,
-            deviation=deviation,
-            comment=comment,
-            position_id=position_id,
-            type_reason=magic,
-        )
-
-    async def _detect_close_direction(self, position_id: int) -> int:
-        """Detect the order type needed to close a position (opposite direction)."""
-        try:
-            positions = await self.get_positions()
-            for p in positions:
-                if p.get("position_id") == position_id:
-                    if p.get("trade_action") == POSITION_TYPE_SELL:
-                        return ORDER_TYPE_BUY
-                    return ORDER_TYPE_SELL
-            logger.warning(
-                "position %d not found in open positions; defaulting to SELL (may open an unwanted short position)",
-                position_id,
-            )
-        except (KeyError, ValueError, TypeError, RuntimeError) as exc:
-            logger.debug("failed to detect position direction: %s", exc)
-        return ORDER_TYPE_SELL
-
-    async def close_position_by(
-        self,
-        symbol: str,
-        position_id: int,
-        position_by: int,
-        *,
-        filling: int = ORDER_FILLING_FOK,
-        digits: int | None = None,
-        magic: int = 0,
-    ) -> TradeResult:
-        """Close a position by an opposite position (close-by).
-
-        This closes position_id using the opposite position position_by.
-        Both positions must be for the same symbol but in opposite directions.
-        """
-        d = self._resolve_digits(symbol, digits)
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_CLOSE_BY,
-            symbol=symbol,
-            digits=d,
-            type_filling=filling,
-            position_id=position_id,
-            position_by=position_by,
-            type_reason=magic,
-        )
-
-    async def modify_position_sltp(
-        self,
-        symbol: str,
-        position_id: int,
-        sl: float = 0.0,
-        tp: float = 0.0,
-    ) -> TradeResult:
-        """Modify stop-loss and take-profit of an open position."""
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_SLTP,
-            symbol=symbol,
-            position_id=position_id,
-            price_sl=sl,
-            price_tp=tp,
-        )
-
-    async def modify_pending_order(
-        self,
-        symbol: str,
-        order: int,
-        price: float,
-        *,
-        sl: float = 0.0,
-        tp: float = 0.0,
-        time_type: int = ORDER_TIME_GTC,
-        expiration: int = 0,
-    ) -> TradeResult:
-        """Modify a pending order's price, SL, TP, or expiration."""
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_MODIFY,
-            symbol=symbol,
-            order=order,
-            price_order=price,
-            price_sl=sl,
-            price_tp=tp,
-            type_time=time_type,
-            time_expiration=expiration,
-        )
-
-    async def cancel_pending_order(self, order: int) -> TradeResult:
-        """Cancel/remove a pending order."""
-        return await self.trade_request(
-            trade_action=TRADE_ACTION_REMOVE,
-            order=order,
-        )

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymt5"
-version = "0.8.0"
+version = "0.9.0"
 description = "Python client for MT5 Web Terminal via reverse-engineered WebSocket binary protocol"
 readme = "README.md"
 license = "MIT"
@@ -27,7 +27,6 @@ classifiers = [
 ]
 dependencies = [
     "websockets>=13.0,<16",
-    "aiohttp>=3.9,<4",
     "cryptography>=42.0.0,<45",
 ]
 
@@ -37,6 +36,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
+    "hypothesis>=6.0",
     "mypy>=1.0",
     "ruff>=0.1",
     "twine>=5.0",
@@ -45,6 +45,12 @@ docs = [
     "sphinx>=7.0",
     "sphinx-rtd-theme>=2.0",
     "sphinx-autodoc-typehints>=2.0",
+]
+structlog = [
+    "structlog>=24.0",
+]
+pandas = [
+    "pandas>=2.0",
 ]
 
 [project.urls]
@@ -60,11 +66,20 @@ include = ["pymt5*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: requires live MT5 server (set PYMT5_INTEGRATION=1)",
+    "benchmark: performance benchmarks",
+    "fuzz: fuzz tests using hypothesis",
+]
 
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
+strict_optional = true
+warn_no_return = true
+disallow_incomplete_defs = true
+warn_unreachable = true
 
 [tool.ruff]
 target-version = "py311"

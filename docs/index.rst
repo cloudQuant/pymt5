@@ -14,9 +14,14 @@ through a clean async Python API.
    api
    trading
    push_notifications
+   protocol_reference
    command_coverage
    python_api_compat
    python_api_detailed_comparison
+   iteration_plan
+   iteration_plan_v2
+   iteration_plan_v3
+   iteration_plan_v4
    changelog
 
 Features
@@ -43,7 +48,6 @@ Requirements
 
 - Python 3.11+
 - ``websockets >= 12.0``
-- ``aiohttp >= 3.9``
 - ``cryptography >= 42.0.0``
 
 Installation

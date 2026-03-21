@@ -280,3 +280,11 @@ TRADE_RETCODE_DESCRIPTIONS: dict[int, str] = {
     10035: "Invalid or prohibited order type",
     10036: "Position already closed",
 }
+
+# ---- Calculation mode sets (used by profit/margin formulas) ----
+FOREX_CALC_MODES = frozenset({0, 5})
+FUTURES_CALC_MODES = frozenset({1, 33, 34})
+CFD_CALC_MODES = frozenset({2, 3, 4, 32, 38})
+OPTION_CALC_MODES = frozenset({35, 36})
+BOND_CALC_MODES = frozenset({37, 39})
+COLLATERAL_CALC_MODE = 64
