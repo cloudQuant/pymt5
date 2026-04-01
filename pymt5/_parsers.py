@@ -252,7 +252,54 @@ def _validate_requested_stops(symbol_info: Record, request: Record, reference_pr
     return None
 
 
-def _parse_tick_batch(body: bytes | None, symbols_by_id: dict[int, SymbolInfo]) -> RecordList:
+def _normalize_tick_price_value(value: float | int | None, digits: int, symbol: str = "") -> float:
+    price: float = float(value or 0.0)
+    if digits <= 0 or price == 0.0:
+        return price
+    scale: float = float(10**digits)
+    normalized_symbol = str(symbol or "").upper()
+    base_symbol = normalized_symbol[:6]
+    is_forex_like_pair = len(base_symbol) == 6 and base_symbol.isalpha()
+
+    # Determine the magnitude threshold that separates "already normalized"
+    # prices from "scaled integer" values sent by the protocol.
+    threshold = scale
+    if digits >= 4 and is_forex_like_pair and "JPY" not in base_symbol:
+        threshold = scale / 10.0
+
+    # For forex-like pairs with digits >= 3, use pure magnitude-based detection.
+    # Proper forex prices are always far below the threshold (e.g. EURUSD ~1.1
+    # vs threshold 10000; USDJPY ~150 vs threshold 1000), so this safely
+    # handles non-integer scaled values like half-pips (87154.5 → 0.871545).
+    if is_forex_like_pair and digits >= 3:
+        if abs(price) >= threshold:
+            return price / scale
+        return price
+
+    # For non-forex instruments (stocks, indices, commodities with low digits),
+    # use the conservative integer-proximity check to avoid misidentifying
+    # legitimate large prices (e.g. XAUUSD at 2000 with digits=2).
+    rounded = round(price)
+    if abs(price - rounded) > 1e-9:
+        return price
+    if abs(rounded) < threshold:
+        return price
+    return float(rounded) / scale
+
+
+def _parse_tick_batch(
+    body: bytes | None,
+    symbols_by_id: dict[int, SymbolInfo],
+    tick_cache_by_id: dict[int, Record] | None = None,
+) -> RecordList:
+    """Parse a batch of ticks from a CMD_TICK_PUSH body.
+
+    The MT5 protocol sends **partial tick updates**: the ``fields`` bitmask
+    indicates which price fields actually changed in this tick.  Unchanged
+    fields are transmitted as ``0.0``.  When *tick_cache_by_id* is provided,
+    zero-valued bid/ask/last fields are filled from the most recent cached
+    tick for the same symbol, so callers always see complete prices.
+    """
     if not body:
         return []
     tick_size = get_series_size(TICK_SCHEMA)
@@ -265,6 +312,24 @@ def _parse_tick_batch(body: bytes | None, symbols_by_id: dict[int, SymbolInfo]) 
         sym_info = symbols_by_id.get(int(tick["symbol_id"]))
         if sym_info:
             tick["symbol"] = sym_info.name
+            digits = int(getattr(sym_info, "digits", 0) or 0)
+            symbol_name = str(getattr(sym_info, "name", "") or "")
+            tick["bid"] = _normalize_tick_price_value(tick.get("bid"), digits, symbol_name)
+            tick["ask"] = _normalize_tick_price_value(tick.get("ask"), digits, symbol_name)
+            tick["last"] = _normalize_tick_price_value(tick.get("last"), digits, symbol_name)
+
+        # Merge with cached tick: carry forward non-zero prices for fields
+        # that the server sent as 0.0 (meaning "unchanged").
+        if tick_cache_by_id is not None:
+            symbol_id = int(tick["symbol_id"])
+            cached = tick_cache_by_id.get(symbol_id)
+            if cached:
+                for key in ("bid", "ask", "last"):
+                    if float(tick.get(key, 0.0) or 0.0) == 0.0:
+                        prev = float(cached.get(key, 0.0) or 0.0)
+                        if prev != 0.0:
+                            tick[key] = prev
+
         ticks.append(tick)
     return ticks
 

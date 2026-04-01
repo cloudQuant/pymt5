@@ -230,6 +230,195 @@ class TestOnTick:
         assert abs(ticks[0]["bid"] - 1.12345) < 1e-9
         assert abs(ticks[0]["ask"] - 1.12350) < 1e-9
 
+    def test_callback_normalizes_integer_scaled_tick_prices_using_symbol_digits(self) -> None:
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="XAUUSD", symbol_id=1, digits=2)
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        body = _build_tick_body(symbol_id=1, bid=474267.0, ask=474268.0, last=474267.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        callback.assert_called_once()
+        ticks = callback.call_args[0][0]
+        assert len(ticks) == 1
+        assert ticks[0]["symbol"] == "XAUUSD"
+        assert ticks[0]["bid"] == 4742.67
+        assert ticks[0]["ask"] == 4742.68
+        assert ticks[0]["last"] == 4742.67
+
+    def test_callback_normalizes_integer_scaled_sub_one_forex_pairs(self) -> None:
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="AUDUSD", symbol_id=1, digits=5)
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        body = _build_tick_body(symbol_id=1, bid=63220.0, ask=63225.0, last=63222.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        callback.assert_called_once()
+        ticks = callback.call_args[0][0]
+        assert len(ticks) == 1
+        assert ticks[0]["symbol"] == "AUDUSD"
+        assert ticks[0]["bid"] == 0.6322
+        assert ticks[0]["ask"] == 0.63225
+        assert ticks[0]["last"] == 0.63222
+
+    def test_cache_normalizes_integer_scaled_sub_one_forex_pairs(self) -> None:
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="EURGBP", symbol_id=1, digits=5)
+
+        body = _build_tick_body(symbol_id=1, bid=85620.0, ask=85625.0, last=85622.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        client._cache_tick_push(result)
+
+        assert client._tick_cache_by_id[1]["bid"] == 0.8562
+        assert client._tick_cache_by_id[1]["ask"] == 0.85625
+        assert client._tick_cache_by_id[1]["last"] == 0.85622
+
+    def test_callback_normalizes_half_pip_fractional_values(self) -> None:
+        """Half-pip values like 87154.5 must be normalized to 0.871545."""
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="EURGBP", symbol_id=1, digits=5)
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        body = _build_tick_body(symbol_id=1, bid=87154.5, ask=87159.5, last=0.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        callback.assert_called_once()
+        ticks = callback.call_args[0][0]
+        assert len(ticks) == 1
+        assert abs(ticks[0]["bid"] - 0.871545) < 1e-9
+        assert abs(ticks[0]["ask"] - 0.871595) < 1e-9
+
+    def test_callback_normalizes_half_pip_jpy_pairs(self) -> None:
+        """JPY pair half-pip values like 150234.5 must be normalized to 150.2345."""
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="USDJPY", symbol_id=1, digits=3)
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        body = _build_tick_body(symbol_id=1, bid=150234.5, ask=150239.5, last=0.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        callback.assert_called_once()
+        ticks = callback.call_args[0][0]
+        assert len(ticks) == 1
+        assert abs(ticks[0]["bid"] - 150.2345) < 1e-9
+        assert abs(ticks[0]["ask"] - 150.2395) < 1e-9
+
+    def test_already_normalized_forex_prices_unchanged(self) -> None:
+        """Properly formatted forex prices should pass through unchanged."""
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="EURGBP", symbol_id=1, digits=5)
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        body = _build_tick_body(symbol_id=1, bid=0.87154, ask=0.87159, last=0.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        callback.assert_called_once()
+        ticks = callback.call_args[0][0]
+        assert abs(ticks[0]["bid"] - 0.87154) < 1e-9
+        assert abs(ticks[0]["ask"] - 0.87159) < 1e-9
+
+    def test_partial_tick_update_carries_forward_cached_bid(self) -> None:
+        """When bid=0.0 (unchanged), the cached bid should be carried forward."""
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)
+        # Seed cache with a previous tick
+        client._tick_cache_by_id[1] = {"bid": 1.12345, "ask": 1.12350, "last": 0.0}
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        # New tick: only ask changed, bid=0.0 means "unchanged"
+        body = _build_tick_body(symbol_id=1, bid=0.0, ask=1.12360, last=0.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        callback.assert_called_once()
+        ticks = callback.call_args[0][0]
+        assert abs(ticks[0]["bid"] - 1.12345) < 1e-9  # carried from cache
+        assert abs(ticks[0]["ask"] - 1.12360) < 1e-9  # new value
+
+    def test_partial_tick_update_carries_forward_cached_ask(self) -> None:
+        """When ask=0.0 (unchanged), the cached ask should be carried forward."""
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)
+        client._tick_cache_by_id[1] = {"bid": 1.12345, "ask": 1.12350, "last": 0.0}
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        # New tick: only bid changed, ask=0.0 means "unchanged"
+        body = _build_tick_body(symbol_id=1, bid=1.12348, ask=0.0, last=0.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        callback.assert_called_once()
+        ticks = callback.call_args[0][0]
+        assert abs(ticks[0]["bid"] - 1.12348) < 1e-9  # new value
+        assert abs(ticks[0]["ask"] - 1.12350) < 1e-9  # carried from cache
+
+    def test_cache_merges_partial_tick_updates(self) -> None:
+        """_cache_tick_push should merge partial ticks with the cache."""
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)
+
+        # First tick: both bid and ask populated
+        body1 = _build_tick_body(symbol_id=1, bid=1.12345, ask=1.12350, last=0.0)
+        client._cache_tick_push(CommandResult(command=CMD_TICK_PUSH, code=0, body=body1))
+        assert abs(client._tick_cache_by_id[1]["bid"] - 1.12345) < 1e-9
+        assert abs(client._tick_cache_by_id[1]["ask"] - 1.12350) < 1e-9
+
+        # Second tick: only ask updated, bid=0 means unchanged
+        body2 = _build_tick_body(symbol_id=1, bid=0.0, ask=1.12355, last=0.0)
+        client._cache_tick_push(CommandResult(command=CMD_TICK_PUSH, code=0, body=body2))
+        assert abs(client._tick_cache_by_id[1]["bid"] - 1.12345) < 1e-9  # kept
+        assert abs(client._tick_cache_by_id[1]["ask"] - 1.12355) < 1e-9  # updated
+
+        # Third tick: only bid updated, ask=0 means unchanged
+        body3 = _build_tick_body(symbol_id=1, bid=1.12348, ask=0.0, last=0.0)
+        client._cache_tick_push(CommandResult(command=CMD_TICK_PUSH, code=0, body=body3))
+        assert abs(client._tick_cache_by_id[1]["bid"] - 1.12348) < 1e-9  # updated
+        assert abs(client._tick_cache_by_id[1]["ask"] - 1.12355) < 1e-9  # kept
+
+    def test_no_cache_first_tick_zeros_remain(self) -> None:
+        """Without a cached tick, zero prices stay zero (no data to carry)."""
+        client = MockClient()
+        client._symbols_by_id[1] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)
+        callback = MagicMock()
+
+        client.on_tick(callback)
+        handler = client.transport.on.call_args[0][1]
+
+        body = _build_tick_body(symbol_id=1, bid=1.12345, ask=0.0, last=0.0)
+        result = CommandResult(command=CMD_TICK_PUSH, code=0, body=body)
+        handler(result)
+
+        ticks = callback.call_args[0][0]
+        assert abs(ticks[0]["bid"] - 1.12345) < 1e-9
+        assert ticks[0]["ask"] == 0.0  # no cached value to carry
+
     def test_multiple_ticks_in_single_push(self) -> None:
         client = MockClient()
         client._symbols_by_id[1] = SymbolInfo(name="EURUSD", symbol_id=1, digits=5)

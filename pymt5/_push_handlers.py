@@ -85,7 +85,7 @@ class _PushHandlersMixin:
     def on_tick(self, callback: Callable[[RecordList], None]) -> Callable:
         def _handler(result: CommandResult) -> None:
             try:
-                callback(_parse_tick_batch(result.body, self._symbols_by_id))
+                callback(_parse_tick_batch(result.body, self._symbols_by_id, self._tick_cache_by_id))
             except _PARSE_ERRORS as exc:
                 logger.error("tick parse error: %s", exc)
 
@@ -326,7 +326,7 @@ class _PushHandlersMixin:
 
         def _handler(result: CommandResult) -> None:
             try:
-                ticks = _parse_tick_batch(result.body, self._symbols_by_id)
+                ticks = _parse_tick_batch(result.body, self._symbols_by_id, self._tick_cache_by_id)
                 for tick in ticks:
                     event = TickEvent(
                         symbol_id=int(tick.get("symbol_id", 0)),
@@ -435,7 +435,7 @@ class _PushHandlersMixin:
 
     def _cache_tick_push(self, result: CommandResult) -> None:
         try:
-            for tick in _parse_tick_batch(result.body, self._symbols_by_id):
+            for tick in _parse_tick_batch(result.body, self._symbols_by_id, self._tick_cache_by_id):
                 symbol_id = int(tick["symbol_id"])
                 self._tick_cache_by_id[symbol_id] = tick
                 # Atomic deque creation via setdefault to avoid race conditions
