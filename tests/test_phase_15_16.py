@@ -817,9 +817,9 @@ class TestHealthCheck:
 
         client.on_health_degraded(on_degraded, threshold_ms=0.001)
 
-        # Mock ping with a tiny sleep to ensure latency > threshold
+        # Mock ping with a sleep long enough to exceed Windows timer resolution (~15.6ms)
         async def slow_ping():
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.05)
 
         with patch.object(client, "ping", new_callable=AsyncMock, side_effect=slow_ping):
             status = await client.health_check()
