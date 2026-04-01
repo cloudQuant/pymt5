@@ -702,7 +702,7 @@ class TestInitImportErrorFallback:
         """Cover lines 10-11: ImportError fallback for importlib.metadata.
 
         We reload pymt5.__init__ with importlib.metadata blocked so the
-        except ImportError branch executes and sets __version__ = "1.0.0".
+        except ImportError branch executes and sets __version__ = "1.0.1".
         """
         import pymt5
 
@@ -712,7 +712,7 @@ class TestInitImportErrorFallback:
             # Setting a module to None in sys.modules causes ImportError
             sys.modules["importlib.metadata"] = None  # type: ignore[assignment]
             importlib.reload(pymt5)
-            assert pymt5.__version__ == "1.0.0"
+            assert pymt5.__version__ == "1.0.1"
         finally:
             # Restore
             if real_metadata is not None:
