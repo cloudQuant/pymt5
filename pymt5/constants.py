@@ -141,6 +141,7 @@ PROP_BYTES = 12
 
 # ---- MT5 Trade Actions (trade_action field in trade_request) ----
 TRADE_ACTION_DEAL = 1  # Place a market order
+TRADE_ACTION_MARKET_DEAL = 3  # Observed market-execution deal on build 6090
 TRADE_ACTION_PENDING = 5  # Place a pending order
 TRADE_ACTION_SLTP = 6  # Modify SL/TP of a position
 TRADE_ACTION_MODIFY = 7  # Modify a pending order

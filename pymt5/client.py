@@ -107,7 +107,11 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         rate_burst: int = 20,
         metrics: MetricsCollector | None = None,
         symbol_cache_ttl: float = 0,
+        trade_protocol: str = "legacy",
     ):
+        if trade_protocol not in ("legacy", "build_6090"):
+            raise ValueError("trade_protocol must be 'legacy' or 'build_6090'")
+        self._trade_protocol = trade_protocol
         self.uri = uri
         self.timeout = timeout
         self._rate_limit = rate_limit

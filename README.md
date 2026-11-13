@@ -188,6 +188,36 @@ asyncio.run(main())
 
 ## Trading Examples
 
+### Trade request wire format
+
+`MT5WebClient()` uses the legacy trade request format by default. For the build 6090
+market-execution environment reported in [PR #1](https://github.com/cloudQuant/pymt5/pull/1),
+opt in explicitly:
+
+```python
+client = MT5WebClient(trade_protocol="build_6090")
+```
+
+This profile adds the observed reserved bytes and uses action `TRADE_ACTION_MARKET_DEAL` (3)
+for `buy_market`, `sell_market`, and `close_position`. The report covers selected symbols
+on one demo server; compatibility with other brokers, execution modes, and builds has not
+been established. The client does not select a profile from the handshake build number.
+
+`trade_request()` and `order_send()` keep the action and fields supplied by the caller.
+For example, callers using `order_send()` for a market-execution deal with this profile
+must explicitly set `action` to `TRADE_ACTION_MARKET_DEAL`. The profile does not set
+`action_id` or `type_flags` automatically; their requirements may depend on the server.
+The `buy_market()`, `sell_market()`, and `close_position()` helpers accept optional
+`action_id` and `type_flags` keywords when a server requires them; both default to zero.
+Trade requests and acknowledgements do not establish that an order was filled; inspect
+subsequent trade results and positions.
+
+`close_position()` rejects non-positive position IDs. If `order_type` is omitted, it
+looks up the position and raises `ValidationError` without placing a trade if the
+position, its direction, or the position query is unavailable, or if the position's
+symbol is missing or differs from the requested symbol. Pass an explicit
+`order_type` only when the intended closing side is known.
+
 ```python
 from pymt5 import (
     MT5WebClient, ORDER_TYPE_BUY, ORDER_TYPE_SELL,

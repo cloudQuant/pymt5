@@ -46,6 +46,11 @@ Pending Orders
 Position Management
 ~~~~~~~~~~~~~~~~~~~
 
+``close_position()`` requires a positive position ID. Without an explicit
+``order_type``, it raises ``ValidationError`` before sending a trade if the
+position cannot be queried, found, its direction cannot be determined, or its
+symbol is missing or differs from the requested symbol.
+
 .. code-block:: python
 
    # Close position (auto-detects BUY/SELL direction)

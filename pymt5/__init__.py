@@ -113,6 +113,7 @@ from pymt5.constants import (
     # Trade actions
     TRADE_ACTION_CLOSE_BY,
     TRADE_ACTION_DEAL,
+    TRADE_ACTION_MARKET_DEAL,
     TRADE_ACTION_MODIFY,
     TRADE_ACTION_PENDING,
     TRADE_ACTION_REMOVE,
@@ -185,6 +186,7 @@ __all__ = [
     "PERIOD_MN1",
     # Trade actions
     "TRADE_ACTION_DEAL",
+    "TRADE_ACTION_MARKET_DEAL",
     "TRADE_ACTION_PENDING",
     "TRADE_ACTION_SLTP",
     "TRADE_ACTION_MODIFY",
