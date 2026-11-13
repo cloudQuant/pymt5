@@ -616,8 +616,14 @@ pymt5 client handles this conversion transparently in trading helper methods.
 Rate Bar Format (cmd=11)
 ------------------------
 
-Historical OHLCV bars returned by ``CMD_GET_RATES`` (cmd=11) have a 48-byte
-per-bar layout:
+Historical OHLCV bars returned by ``CMD_GET_RATES`` (cmd=11) were observed
+with the following 48-byte per-bar layout. Some servers may use a 56-byte
+extended layout with an additional 64-bit ``real_volume`` field. When a
+response length fits both layouts, the default ``auto`` mode raises
+``ProtocolError`` rather than guessing; set ``rate_bar_format`` on the client
+or pass ``bar_format`` to the rates methods after identifying the server's
+format. Lengths not divisible by the selected record size are rejected; length
+checks cannot detect truncation that happens to match a supported format.
 
 .. list-table:: Rate Bar Fields
    :header-rows: 1

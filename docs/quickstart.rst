@@ -31,6 +31,10 @@ Basic Connection
 
    asyncio.run(main())
 
+Call ``logout()`` before logging in again on the same client. A successful
+logout clears stored reconnect credentials; a rejected logout raises
+``SessionError`` and retains the current session state and credentials.
+
 Tick Subscription
 -----------------
 

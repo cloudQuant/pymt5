@@ -30,12 +30,14 @@ from pymt5.constants import (
     ORDER_TIME_SPECIFIED_DAY,
     ORDER_TYPE_BUY_STOP_LIMIT,
     ORDER_TYPE_SELL_STOP_LIMIT,
+    PROP_BYTES,
     PROP_F64,
     PROP_FIXED_STRING,
     PROP_U32,
     PROP_U64,
     TRADE_ACTION_CLOSE_BY,
     TRADE_ACTION_DEAL,
+    TRADE_ACTION_MARKET_DEAL,
     TRADE_ACTION_MODIFY,
     TRADE_ACTION_PENDING,
     TRADE_ACTION_REMOVE,
@@ -87,6 +89,7 @@ class _TradingMixin:
     transport: MT5WebSocketTransport
     _symbols: dict[str, SymbolInfo]
     _last_error: tuple[int, str]
+    _trade_protocol: str = "legacy"
 
     if TYPE_CHECKING:
 
@@ -392,9 +395,9 @@ class _TradingMixin:
         position_by: int = 0,
         time_expiration: int = 0,
     ) -> TradeResult:
-        if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_PENDING) and volume <= 0:
+        if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING) and volume <= 0:
             raise ValidationError(f"volume must be > 0 for trade_action={trade_action}, got {volume}")
-        if trade_action == TRADE_ACTION_DEAL and price_order <= 0.0:
+        if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL) and price_order <= 0.0:
             logger.debug("market order with price_order=0; server will use current price")
         if trade_action == TRADE_ACTION_PENDING and price_order <= 0.0:
             raise ValidationError(f"price_order must be > 0 for pending orders, got {price_order}")
@@ -431,6 +434,8 @@ class _TradingMixin:
                 (PROP_F64, price_sl),
                 (PROP_F64, price_tp),
                 (PROP_U64, deviation),
+                # Build 6090 reserves 12 bytes here in observed captures.
+                *([(PROP_BYTES, bytes(12))] if self._trade_protocol == "build_6090" else []),
                 (PROP_FIXED_STRING, comment[:32], 64),
                 (PROP_U64, position_id),
                 (PROP_U64, position_by),
@@ -628,7 +633,7 @@ class _TradingMixin:
         action = int(request.get("action", 0) or 0)
         symbol = str(request.get("symbol", "") or "")
         symbol_info = await self.symbol_info(symbol) if symbol else None
-        if action in {TRADE_ACTION_DEAL, TRADE_ACTION_PENDING}:
+        if action in {TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING}:
             result = await self._validate_deal_or_pending(request, symbol_info)
             if result is not None:
                 return result
@@ -650,7 +655,7 @@ class _TradingMixin:
 
     async def _estimate_order_margin(self, request: Record) -> float:
         action = int(request.get("action", 0) or 0)
-        if action not in {TRADE_ACTION_DEAL, TRADE_ACTION_PENDING}:
+        if action not in {TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING}:
             return 0.0
         price = await self._resolve_order_check_price(
             request,

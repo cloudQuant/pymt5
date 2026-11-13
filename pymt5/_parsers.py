@@ -18,6 +18,7 @@ from pymt5.constants import (
     PERIOD_MAP,
     TRADE_ACTION_PENDING,
 )
+from pymt5.exceptions import ProtocolError, ValidationError
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
     ACCOUNT_WEB_COMMISSION_FIELD_NAMES,
@@ -542,38 +543,34 @@ def _parse_open_account_result(body: bytes | None) -> OpenAccountResult:
     )
 
 
-def _parse_rate_bars(body: bytes | None) -> RecordList:
+def _validate_rate_bar_format(bar_format: str) -> None:
+    if bar_format not in ("auto", "standard", "extended"):
+        raise ValidationError("bar_format must be 'auto', 'standard', or 'extended'")
+
+
+def _parse_rate_bars(body: bytes | None, bar_format: str = "auto") -> RecordList:
+    _validate_rate_bar_format(bar_format)
     if not body:
         return []
     bar_size_std = get_series_size(RATE_BAR_SCHEMA)
     bar_size_ext = get_series_size(RATE_BAR_SCHEMA_EXT)
-    def parse(schema, names, bar_size):
-        return [
-            dict(zip(names, SeriesCodec.parse_at(body, schema, offset)))
-            for offset in range(0, len(body) - bar_size + 1, bar_size)
-        ]
-
     standard = len(body) % bar_size_std == 0
-    extended = bar_size_ext != bar_size_std and len(body) % bar_size_ext == 0
-    if extended and not standard:
-        return parse(RATE_BAR_SCHEMA_EXT, RATE_BAR_FIELD_NAMES_EXT, bar_size_ext)
+    extended = len(body) % bar_size_ext == 0
+    if bar_format == "auto":
+        if standard and extended:
+            raise ProtocolError("ambiguous rate bar format; specify 'standard' or 'extended'")
+        if not standard and not extended:
+            raise ProtocolError(f"rate bar body length {len(body)} does not match a supported format")
+        bar_format = "standard" if standard else "extended"
 
-    bars = parse(RATE_BAR_SCHEMA, RATE_BAR_FIELD_NAMES, bar_size_std)
-    if not extended:
-        return bars
-
-    # Multiples of 336 bytes fit both 48-byte and 56-byte records.  Check the
-    # bar chronology before choosing: interpreting standard bars as extended
-    # records produces bogus (often zero) timestamps and destroys ordering.
-    extended_bars = parse(RATE_BAR_SCHEMA_EXT, RATE_BAR_FIELD_NAMES_EXT, bar_size_ext)
-
-    def chronology_score(records):
-        times = [bar["time"] for bar in records]
-        positive = sum(value > 0 for value in times)
-        ascending = sum(0 < earlier < later for earlier, later in zip(times, times[1:]))
-        return (ascending / max(1, len(times) - 1), positive / len(times))
-
-    return extended_bars if chronology_score(extended_bars) > chronology_score(bars) else bars
+    schema, names, size = (
+        (RATE_BAR_SCHEMA, RATE_BAR_FIELD_NAMES, bar_size_std)
+        if bar_format == "standard"
+        else (RATE_BAR_SCHEMA_EXT, RATE_BAR_FIELD_NAMES_EXT, bar_size_ext)
+    )
+    if len(body) % size:
+        raise ProtocolError(f"rate bar body length {len(body)} is not a multiple of {size} for {bar_format}")
+    return [dict(zip(names, SeriesCodec.parse_at(body, schema, offset))) for offset in range(0, len(body), size)]
 
 
 def _parse_counted_records(

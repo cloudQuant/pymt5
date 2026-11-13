@@ -1033,12 +1033,12 @@ def test_parse_rate_bars_extended_schema():
 
 
 def test_parse_rate_bars_safety_break():
-    """Cover line 494: body truncated midway through bars."""
+    """A truncated response is rejected rather than silently discarded."""
     # Build 1.5 bars worth of data -- the second bar is incomplete
     bar = struct.pack("<iddddqi", 1773293460, 1.15, 1.16, 1.14, 1.155, 57, 0)
     body = bar + b"\x00" * 20  # not enough for second full bar
-    bars = _parse_rate_bars(body)
-    assert len(bars) == 1
+    with pytest.raises(ProtocolError, match="does not match"):
+        _parse_rate_bars(body)
 
 
 # --- _parse_verification_status ---
@@ -1466,20 +1466,20 @@ def test_init_version_fallback():
         try:
             from importlib.metadata import version as _pkg_version
 
-            _pkg_version("pymt5")
+            _pkg_version("mt5-web-client")
         except Exception:
             pass
 
-        # The fallback should produce "0.7.0"
+        # The fallback should produce "1.0.3"
         # But since pymt5 IS installed, let's force the exception
         with patch("importlib.metadata.version", side_effect=Exception("oops")):
             try:
                 from importlib.metadata import version as _pkg_version2
 
-                ver = _pkg_version2("pymt5")
+                ver = _pkg_version2("mt5-web-client")
             except Exception:
-                ver = "0.7.0"
-            assert ver == "0.7.0"
+                ver = "1.0.3"
+            assert ver == "1.0.3"
 
 
 # ===========================================================================

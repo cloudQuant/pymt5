@@ -7,7 +7,8 @@ Unreleased
 - Send a browser-compatible User-Agent during WebSocket connection setup for
   Web Terminal gateways that reject the default Python client identity.
 - Report rejected Web Terminal logins as authentication errors.
-- Disambiguate standard and extended historical rate bars by chronology.
+- Reject ambiguous historical rate responses unless the caller explicitly
+  selects a matching format; reject lengths that do not match the selected format.
 
 v1.0.1 (2026-04-02)
 --------------------

@@ -1,10 +1,10 @@
 # pymt5
 
-[![CI](https://github.com/NexusAlien/pymt5/actions/workflows/ci.yml/badge.svg)](https://github.com/NexusAlien/pymt5/actions/workflows/ci.yml)
+[![CI](https://github.com/cloudQuant/pymt5/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudQuant/pymt5/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Documentation](https://readthedocs.org/projects/pymt5/badge/?version=latest)](https://pymt5.readthedocs.io/en/latest/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/NexusAlien/pymt5)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/cloudQuant/pymt5)
 
 Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary protocol.
 
@@ -45,11 +45,23 @@ See the [changelog](docs/changelog.rst) for releases and subsequent changes.
 - **`get_symbol_groups` (cmd=9)** — category tree (Forex, Crypto, Indexes, etc.)
 - `get_full_symbol_info` (cmd=18) — detailed contract specs (tick size, margins, volumes, bond face value/accrued interest, trade schedule, subscription flags)
 - **`get_spreads` (cmd=20)** — spread data with proper schema parsing
-- `get_rates` (cmd=11) — historical OHLCV bars (M1 to MN1), auto-detects extended format with `real_volume`
+- `get_rates` (cmd=11) — historical OHLCV bars (M1 to MN1), with standard and extended formats
 - `subscribe_ticks` (cmd=7) — real-time tick push (cmd=8) with callback
 - `subscribe_symbols` — name-based tick subscription (resolves names via symbol cache)
 - **`subscribe_book` (cmd=22)** — order book / depth-of-market subscription
 - **`subscribe_book_by_name`** — name-based order book subscription
+
+By default, rate responses are decoded automatically only when their length uniquely
+identifies the 48-byte standard or 56-byte extended format. Lengths divisible by both,
+or by neither, raise `ProtocolError` rather than guessing. This is a behavior
+change for ambiguous or mismatched responses. Select the format confirmed for your
+server with `MT5WebClient(rate_bar_format="standard")` or `"extended"`; alternatively,
+pass `bar_format="standard"` or `"extended"` to `get_rates()` or the `copy_rates_*()`
+wrappers. The extended format includes `real_volume`. `get_rates_raw()` can help inspect
+an unknown response, but length alone does not identify an ambiguous format. Both
+`get_rates()` and `get_rates_raw()` raise `ProtocolError` for nonzero server response codes.
+Length validation cannot detect truncation or an incorrect format selection when the
+resulting size happens to match the selected record size.
 
 ### Official MetaTrader5-style Helpers
 - Session/account: `initialize`, `shutdown`, `account_info`, `terminal_info`, `version`
@@ -123,13 +135,13 @@ Live-verified against MetaQuotes-Demo on 2026-03-16. The current official Web Te
 ## Install
 
 ```bash
-pip install git+https://github.com/NexusAlien/pymt5.git
+pip install mt5-web-client
 ```
 
 Or install from source:
 
 ```bash
-git clone https://github.com/NexusAlien/pymt5.git
+git clone https://github.com/cloudQuant/pymt5.git
 cd pymt5
 pip install -e .
 ```
@@ -188,7 +200,42 @@ async def main():
 asyncio.run(main())
 ```
 
+Calling `login()` while already logged in raises `SessionError`; call `logout()`
+before switching accounts. A successful `logout()` clears stored reconnect
+credentials. A rejected logout raises `SessionError` and retains the current
+session state and credentials.
+
 ## Trading Examples
+
+### Trade request wire format
+
+`MT5WebClient()` uses the legacy trade request format by default. For the build 6090
+market-execution environment reported in [PR #1](https://github.com/cloudQuant/pymt5/pull/1),
+opt in explicitly:
+
+```python
+client = MT5WebClient(trade_protocol="build_6090")
+```
+
+This profile adds the observed reserved bytes and uses action `TRADE_ACTION_MARKET_DEAL` (3)
+for `buy_market`, `sell_market`, and `close_position`. The report covers selected symbols
+on one demo server; compatibility with other brokers, execution modes, and builds has not
+been established. The client does not select a profile from the handshake build number.
+
+`trade_request()` and `order_send()` keep the action and fields supplied by the caller.
+For example, callers using `order_send()` for a market-execution deal with this profile
+must explicitly set `action` to `TRADE_ACTION_MARKET_DEAL`. The profile does not set
+`action_id` or `type_flags` automatically; their requirements may depend on the server.
+The `buy_market()`, `sell_market()`, and `close_position()` helpers accept optional
+`action_id` and `type_flags` keywords when a server requires them; both default to zero.
+Trade requests and acknowledgements do not establish that an order was filled; inspect
+subsequent trade results and positions.
+
+`close_position()` rejects non-positive position IDs. If `order_type` is omitted, it
+looks up the position and raises `ValidationError` without placing a trade if the
+position, its direction, or the position query is unavailable, or if the position's
+symbol is missing or differs from the requested symbol. Pass an explicit
+`order_type` only when the intended closing side is known.
 
 ```python
 from pymt5 import (

@@ -697,7 +697,7 @@ def test_parse_rate_bars_ambiguous_standard_length():
                     1.15, 1.16, 1.14, 1.155, 100, 5)
         for i in range(140)
     )
-    bars = _parse_rate_bars(body)
+    bars = _parse_rate_bars(body, "standard")
     assert len(bars) == 140
     assert [bar["time"] for bar in bars] == [1773293460 + i * 14400 for i in range(140)]
     assert all("real_volume" not in bar for bar in bars)
@@ -709,7 +709,7 @@ def test_parse_rate_bars_ambiguous_extended_length():
                     1.15, 1.16, 1.14, 1.155, 100, 5, 50000)
         for i in range(6)
     )
-    bars = _parse_rate_bars(body)
+    bars = _parse_rate_bars(body, "extended")
     assert len(bars) == 6
     assert [bar["time"] for bar in bars] == [1773293460 + i * 14400 for i in range(6)]
     assert all(bar["real_volume"] == 50000 for bar in bars)
@@ -718,14 +718,14 @@ def test_parse_rate_bars_ambiguous_extended_length():
 # ---- Close Position Direction Detection ----
 
 
-def test_detect_close_direction_defaults_to_sell():
+def test_detect_close_direction_fails_if_positions_cannot_be_queried():
     client = MT5WebClient()
     import asyncio
 
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(client._detect_close_direction(999))
-        assert result == ORDER_TYPE_SELL
+        with pytest.raises(ValueError, match="unable to query positions"):
+            loop.run_until_complete(client._detect_close_direction(999, "EURUSD"))
     finally:
         loop.close()
 

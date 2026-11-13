@@ -37,6 +37,7 @@ from pymt5._parsers import (  # noqa: F401  — re-exported for backward compati
     _parse_verification_status,
     _tick_matches_copy_flags,
     _to_copy_tick_record,
+    _validate_rate_bar_format,
     _validate_requested_stops,
     _validate_requested_volume,
 )
@@ -107,7 +108,14 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         rate_burst: int = 20,
         metrics: MetricsCollector | None = None,
         symbol_cache_ttl: float = 0,
+        trade_protocol: str = "legacy",
+        rate_bar_format: str = "auto",
     ):
+        if trade_protocol not in ("legacy", "build_6090"):
+            raise ValueError("trade_protocol must be 'legacy' or 'build_6090'")
+        _validate_rate_bar_format(rate_bar_format)
+        self._trade_protocol = trade_protocol
+        self._rate_bar_format = rate_bar_format
         self.uri = uri
         self.timeout = timeout
         self._rate_limit = rate_limit
@@ -138,6 +146,7 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         self._book_cache_by_name: dict[str, Record] = {}
         self._last_error: tuple[int, str] = (0, "")
         self._logged_in = False
+        self._session_lock = asyncio.Lock()
         self._bootstrap_pristine = False
         # Reconnect settings
         self._auto_reconnect = auto_reconnect
@@ -208,20 +217,32 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
     async def close(self) -> None:
         self._closing = True
         self._stop_heartbeat()
-        if self._reconnect_task is not None:
-            self._reconnect_task.cancel()
-            self._reconnect_task = None
-        if self._logged_in:
+        if self._reconnect_task is not None and self._reconnect_task is not asyncio.current_task():
+            reconnect_task = self._reconnect_task
+            reconnect_task.cancel()
             try:
-                await self.logout()
+                await reconnect_task
+            except asyncio.CancelledError:
+                if asyncio.current_task() and asyncio.current_task().cancelling():
+                    raise
             except Exception:
-                logger.debug("logout during close() failed", exc_info=True)
-            self._logged_in = False
-        await self.transport.close()
-        self._bootstrap_pristine = False
-        self._closing = False
-        # Clear stored credentials from memory
-        self._clear_credentials()
+                logger.warning("reconnect task failed during close", exc_info=True)
+            self._reconnect_task = None
+        async with self._session_lock:
+            if self._logged_in:
+                try:
+                    await self._logout_unlocked()
+                except Exception:
+                    logger.debug("logout during close() failed", exc_info=True)
+                self._logged_in = False
+            # An in-flight login may have started a heartbeat while close waited
+            # for the session lock, including when its subsequent logout failed.
+            self._stop_heartbeat()
+            await self.transport.close()
+            self._bootstrap_pristine = False
+            self._closing = False
+            # Clear stored credentials from memory
+            self._clear_credentials()
         logger.info("connection closed")
 
     def _clear_credentials(self) -> None:
@@ -303,13 +324,12 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
             logger.info("reconnect attempt %d/%d (delay=%.1fs)", attempt, self._max_reconnect_attempts, delay)
             if self._metrics:
                 self._metrics.on_reconnect_attempt(attempt)
-            await asyncio.sleep(delay)
             try:
+                await asyncio.sleep(delay)
+                self._logged_in = False
+                self._stop_heartbeat()
                 # Close old transport to release resources
-                try:
-                    await self.transport.close()
-                except Exception:
-                    pass
+                await self._close_reconnect_transport()
                 # Reset transport for fresh connection
                 self.transport = MT5WebSocketTransport(
                     uri=self.uri,
@@ -339,8 +359,53 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
                     self._metrics.on_reconnect_success(attempt)
                 return
             except (OSError, PyMT5Error) as exc:
+                self._logged_in = False
+                self._stop_heartbeat()
+                await self._close_reconnect_transport()
                 logger.warning("reconnect attempt %d failed: %s", attempt, exc)
+            except asyncio.CancelledError:
+                self._logged_in = False
+                self._stop_heartbeat()
+                await self._close_reconnect_transport()
+                raise
         logger.error("all %d reconnect attempts exhausted", self._max_reconnect_attempts)
+
+    async def _close_reconnect_transport(self) -> None:
+        """Disable command dispatch and callbacks before closing a failed session."""
+        self.transport._on_disconnect = None
+        self.transport.is_ready = False
+        close_task = asyncio.create_task(self.transport.close())
+        deadline = asyncio.get_running_loop().time() + max(0.0, self.timeout)
+        cancelled = False
+        while True:
+            try:
+                remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+                await asyncio.wait_for(asyncio.shield(close_task), timeout=remaining)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if close_task.done():
+                    break
+            except TimeoutError:
+                close_task.cancel()
+                # Consume a late exception even if a transport ignores cancellation.
+                close_task.add_done_callback(self._consume_reconnect_close_result)
+                logger.warning("timed out closing reconnect transport")
+                break
+            except Exception:
+                logger.warning("failed to close reconnect transport", exc_info=True)
+                break
+        if cancelled:
+            raise asyncio.CancelledError
+
+    @staticmethod
+    def _consume_reconnect_close_result(task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("failed to close reconnect transport", exc_info=True)
 
     # ---- Health monitoring (Phase 16.3) ----
 
@@ -459,56 +524,83 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         utm_source: str = "",
         auto_heartbeat: bool = True,
     ) -> tuple[str, int]:
-        self._bootstrap_pristine = False
-        payload = self._build_login_payload(
-            login=login,
-            password=password,
-            url=url,
-            session=session,
-            otp=otp,
-            version=version,
-            cid=cid,
-            lead_cookie_id=lead_cookie_id,
-            lead_affiliate_site=lead_affiliate_site,
-            utm_campaign=utm_campaign,
-            utm_source=utm_source,
-        )
-        result = await self.transport.send_command(CMD_LOGIN, payload)
-        if result.code != 0:
-            raise AuthenticationError(f"MT5 Web Terminal rejected login (response code {result.code})")
-        if len(result.body) < 168:
-            raise AuthenticationError(
-                f"MT5 Web Terminal returned an incomplete login response ({len(result.body)} bytes)"
+        async with self._session_lock:
+            if self._logged_in:
+                raise SessionError("already logged in; call logout() before logging in again")
+            self._bootstrap_pristine = False
+            payload = self._build_login_payload(
+                login=login,
+                password=password,
+                url=url,
+                session=session,
+                otp=otp,
+                version=version,
+                cid=cid,
+                lead_cookie_id=lead_cookie_id,
+                lead_affiliate_site=lead_affiliate_site,
+                utm_campaign=utm_campaign,
+                utm_source=utm_source,
             )
-        token_bytes, session_id = SeriesCodec.parse(result.body, LOGIN_RESPONSE_SCHEMA)
-        self._logged_in = True
-        # Store credentials for potential reconnect
-        self._login_kwargs = {
-            "login": login,
-            "password": password,
-            "url": url,
-            "session": session,
-            "otp": otp,
-            "version": version,
-            "cid": cid,
-            "lead_cookie_id": lead_cookie_id,
-            "lead_affiliate_site": lead_affiliate_site,
-            "utm_campaign": utm_campaign,
-            "utm_source": utm_source,
-        }
-        logger.info("logged in: login=%d session=%d", login, int(session_id))
-        if auto_heartbeat:
-            self._start_heartbeat()
-        return bytes_to_hex(token_bytes), int(session_id)
+            result = await self.transport.send_command(CMD_LOGIN, payload)
+            if result.code != 0:
+                raise AuthenticationError(f"MT5 Web Terminal rejected login (response code {result.code})")
+            token_bytes, session_id = SeriesCodec.parse(result.body, LOGIN_RESPONSE_SCHEMA)
+            self._logged_in = True
+            # Store credentials for potential reconnect
+            self._login_kwargs = {
+                "login": login,
+                "password": password,
+                "url": url,
+                "session": session,
+                "otp": otp,
+                "version": version,
+                "cid": cid,
+                "lead_cookie_id": lead_cookie_id,
+                "lead_affiliate_site": lead_affiliate_site,
+                "utm_campaign": utm_campaign,
+                "utm_source": utm_source,
+            }
+            logger.info("logged in: login=%d session=%d", login, int(session_id))
+            if auto_heartbeat:
+                self._start_heartbeat()
+            return bytes_to_hex(token_bytes), int(session_id)
 
     async def ping(self) -> None:
         await self.transport.send_command(CMD_PING)
 
     async def logout(self) -> None:
+        async with self._session_lock:
+            await self._logout_unlocked()
+
+    async def _logout_unlocked(self) -> None:
+        reconnect_task = self._reconnect_task
+        if (
+            reconnect_task is not None
+            and not reconnect_task.done()
+            and reconnect_task is not asyncio.current_task()
+        ):
+            reconnect_task.cancel()
+            try:
+                await reconnect_task
+            except asyncio.CancelledError:
+                if asyncio.current_task() and asyncio.current_task().cancelling():
+                    raise
+            if self._reconnect_task is reconnect_task:
+                self._reconnect_task = None
+            # Cancellation closes the reconnect transport, invalidating that session.
+            if not self.transport.is_ready:
+                self._stop_heartbeat()
+                self._logged_in = False
+                self._bootstrap_pristine = False
+                self._clear_credentials()
+                return
+        result = await self.transport.send_command(CMD_LOGOUT)
+        if result.code != 0:
+            raise SessionError(f"MT5 Web Terminal rejected logout (response code {result.code})")
         self._stop_heartbeat()
-        await self.transport.send_command(CMD_LOGOUT)
         self._logged_in = False
         self._bootstrap_pristine = False
+        self._clear_credentials()
         logger.info("logged out")
 
     def _clear_last_error(self) -> None:

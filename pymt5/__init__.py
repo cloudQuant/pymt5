@@ -6,9 +6,9 @@ Reverse-engineered WebSocket binary protocol implementation.
 try:
     from importlib.metadata import version as _pkg_version
 
-    __version__ = _pkg_version("pymt5")
+    __version__ = _pkg_version("mt5-web-client")
 except ImportError:
-    __version__ = "1.0.1"
+    __version__ = "1.0.3"
 
 from pymt5._dataframe import to_dataframe
 from pymt5._metrics import MetricsCollector
@@ -113,6 +113,7 @@ from pymt5.constants import (
     # Trade actions
     TRADE_ACTION_CLOSE_BY,
     TRADE_ACTION_DEAL,
+    TRADE_ACTION_MARKET_DEAL,
     TRADE_ACTION_MODIFY,
     TRADE_ACTION_PENDING,
     TRADE_ACTION_REMOVE,
@@ -185,6 +186,7 @@ __all__ = [
     "PERIOD_MN1",
     # Trade actions
     "TRADE_ACTION_DEAL",
+    "TRADE_ACTION_MARKET_DEAL",
     "TRADE_ACTION_PENDING",
     "TRADE_ACTION_SLTP",
     "TRADE_ACTION_MODIFY",
