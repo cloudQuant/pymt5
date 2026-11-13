@@ -223,7 +223,8 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
             try:
                 await reconnect_task
             except asyncio.CancelledError:
-                if asyncio.current_task() and asyncio.current_task().cancelling():
+                current_task = asyncio.current_task()
+                if current_task is not None and current_task.cancelling():
                     raise
             except Exception:
                 logger.warning("reconnect task failed during close", exc_info=True)
@@ -583,7 +584,8 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
             try:
                 await reconnect_task
             except asyncio.CancelledError:
-                if asyncio.current_task() and asyncio.current_task().cancelling():
+                current_task = asyncio.current_task()
+                if current_task is not None and current_task.cancelling():
                     raise
             if self._reconnect_task is reconnect_task:
                 self._reconnect_task = None

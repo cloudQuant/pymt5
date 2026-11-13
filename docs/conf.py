@@ -13,7 +13,7 @@ try:
     from importlib.metadata import version as _pkg_version
     release = _pkg_version("mt5-web-client")
 except Exception:
-    release = "1.0.3"
+    release = "1.0.4"
 
 extensions = [
     "sphinx.ext.autodoc",

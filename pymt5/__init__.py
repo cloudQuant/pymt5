@@ -8,7 +8,7 @@ try:
 
     __version__ = _pkg_version("mt5-web-client")
 except ImportError:
-    __version__ = "1.0.3"
+    __version__ = "1.0.4"
 
 from pymt5._dataframe import to_dataframe
 from pymt5._metrics import MetricsCollector

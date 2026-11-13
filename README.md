@@ -3,18 +3,32 @@
 [![CI](https://github.com/cloudQuant/pymt5/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudQuant/pymt5/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Documentation](https://readthedocs.org/projects/pymt5/badge/?version=latest)](https://pymt5.readthedocs.io/en/latest/)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://cloudquant.github.io/pymt5/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/cloudQuant/pymt5)
 
 Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary protocol.
 
 See the [changelog](docs/changelog.rst) for releases and subsequent changes.
 
+## What's new in 1.0.4
+
+- Trade requests retain the legacy wire format by default. An explicit
+  `build_6090` profile adds the reported reserved bytes and market-deal action.
+- Ambiguous or mismatched historical rate response lengths raise `ProtocolError`;
+  choose `standard` or `extended` explicitly when the server's format is known.
+- Login rejects nonzero server response codes, and logout clears stored reconnect
+  credentials after success. Switching accounts requires an explicit logout.
+- `close_position()` rejects invalid IDs and refuses automatic direction detection
+  when the position or its matching symbol cannot be verified.
+
+These changes have offline test coverage. The new build 6090 profile has not been
+independently verified against a broker in this release.
+
 ## Requirements
 
 - **Python 3.11+** (3.11, 3.12, 3.13)
 - **Platforms**: Linux, macOS, Windows
-- **Dependencies**: `websockets`, `aiohttp`, `cryptography`
+- **Dependencies**: `websockets`, `cryptography`
 
 ## Features
 
@@ -53,7 +67,8 @@ See the [changelog](docs/changelog.rst) for releases and subsequent changes.
 
 By default, rate responses are decoded automatically only when their length uniquely
 identifies the 48-byte standard or 56-byte extended format. Lengths divisible by both,
-or by neither, raise `ProtocolError` rather than guessing. This is a behavior
+including any nonzero multiple of 336 bytes, or by neither, raise `ProtocolError` rather
+than guessing. This is a behavior
 change for ambiguous or mismatched responses. Select the format confirmed for your
 server with `MT5WebClient(rate_bar_format="standard")` or `"extended"`; alternatively,
 pass `bar_format="standard"` or `"extended"` to `get_rates()` or the `copy_rates_*()`
@@ -128,9 +143,11 @@ resulting size happens to match the selected record size.
 - Command IDs exported: `CMD_GET_ACCOUNT`, `CMD_GET_SYMBOL_GROUPS`, `CMD_TRADE_UPDATE_PUSH`, `CMD_ACCOUNT_UPDATE_PUSH`, `CMD_SYMBOL_DETAILS_PUSH`, `CMD_TRADE_RESULT_PUSH`, `CMD_SUBSCRIBE_BOOK`, `CMD_BOOK_PUSH`, `CMD_GET_CORPORATE_LINKS`
 
 ### Tests
-- 206 offline unit tests: protocol, schemas, roundtrip parsing, trade constants, symbol cache, volume conversion, reconnect logic, compatibility helpers, onboarding/OTP flows, local formula logic, full symbol schema, push handler registration, and extended rate/tick parsing
+- Offline unit tests cover protocol encoding, trade and rate parsing, session handling,
+  reconnect logic, compatibility helpers, and push handlers.
 
-Live-verified against MetaQuotes-Demo on 2026-03-16. The current official Web Terminal reports build 5687, built on 2026-03-15. Verified features include: 6,104 symbols, 6 symbol groups, account info, positions, 60 M1 bars, deals, orders, tick push, all 9 order types, order book subscription, corporate links, notifications, verify code, trader params, and the current onboarding / OTP flows.
+Earlier functionality was tested against MetaQuotes-Demo on 2026-03-16 with Web Terminal
+build 5687. Those historical results do not verify the changes in 1.0.4.
 
 ## Install
 
@@ -226,6 +243,8 @@ been established. The client does not select a profile from the handshake build 
 For example, callers using `order_send()` for a market-execution deal with this profile
 must explicitly set `action` to `TRADE_ACTION_MARKET_DEAL`. The profile does not set
 `action_id` or `type_flags` automatically; their requirements may depend on the server.
+The PR's observed official-client requests used an `action_id` starting at 1000 and
+`type_flags=2`; whether these values are required has not been established.
 The `buy_market()`, `sell_market()`, and `close_position()` helpers accept optional
 `action_id` and `type_flags` keywords when a server requires them; both default to zero.
 Trade requests and acknowledgements do not establish that an order was filled; inspect
@@ -385,7 +404,7 @@ Commands 21, 25, 33, 37, 50, 52, 100-112 are still accepted by the transport all
 
 ## Documentation
 
-Full API documentation is available at **[pymt5.readthedocs.io/en/latest](https://pymt5.readthedocs.io/en/latest/)**.
+Full API documentation is available on [GitHub Pages](https://cloudquant.github.io/pymt5/).
 
 To build docs locally:
 

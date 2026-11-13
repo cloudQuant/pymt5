@@ -1470,7 +1470,7 @@ def test_init_version_fallback():
         except Exception:
             pass
 
-        # The fallback should produce "1.0.3"
+        # The fallback should produce "1.0.4"
         # But since pymt5 IS installed, let's force the exception
         with patch("importlib.metadata.version", side_effect=Exception("oops")):
             try:
@@ -1478,8 +1478,8 @@ def test_init_version_fallback():
 
                 ver = _pkg_version2("mt5-web-client")
             except Exception:
-                ver = "1.0.3"
-            assert ver == "1.0.3"
+                ver = "1.0.4"
+            assert ver == "1.0.4"
 
 
 # ===========================================================================

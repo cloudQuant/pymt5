@@ -1,14 +1,32 @@
 Changelog
 =========
 
-Unreleased
-----------
+v1.0.4 (2026-11-13)
+-------------------
 
 - Send a browser-compatible User-Agent during WebSocket connection setup for
   Web Terminal gateways that reject the default Python client identity.
-- Report rejected Web Terminal logins as authentication errors.
-- Reject ambiguous historical rate responses unless the caller explicitly
-  selects a matching format; reject lengths that do not match the selected format.
+- Report nonzero login response codes as authentication errors. A truncated
+  successful response remains a protocol error.
+- Reject repeated login on an active client; successful logout clears stored
+  reconnect credentials. Serialize login, logout and close, and clean up failed
+  reconnect attempts before retrying.
+- Reject nonzero rate response codes, ambiguous response lengths, and lengths
+  that do not match the selected historical rate format. Configure
+  ``rate_bar_format`` or pass ``bar_format`` to select a known format explicitly.
+- Preserve the legacy trade request layout by default. Add the opt-in
+  ``build_6090`` profile and ``TRADE_ACTION_MARKET_DEAL`` for the reported market
+  execution format; callers can explicitly supply ``action_id`` and ``type_flags``.
+- Reject invalid close-position IDs and stop automatic closing when the position,
+  direction or matching symbol cannot be established.
+- The build 6090 profile is based on a contributor's reported demo observations;
+  this release has not independently verified broker compatibility.
+
+v1.0.3 (2026-11-13)
+-------------------
+
+- Publish the project as ``mt5-web-client`` on PyPI; the Python import remains
+  ``pymt5``.
 
 v1.0.1 (2026-04-02)
 --------------------

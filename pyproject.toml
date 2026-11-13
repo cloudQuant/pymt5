@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mt5-web-client"
-version = "1.0.3"
+version = "1.0.4"
 description = "Python client for MT5 Web Terminal via reverse-engineered WebSocket binary protocol"
 readme = "README.md"
 license = "MIT"
@@ -55,7 +55,7 @@ pandas = [
 
 [project.urls]
 Homepage = "https://github.com/cloudQuant/pymt5"
-Documentation = "https://pymt5.readthedocs.io"
+Documentation = "https://cloudquant.github.io/pymt5/"
 Repository = "https://github.com/cloudQuant/pymt5"
 Issues = "https://github.com/cloudQuant/pymt5/issues"
 
