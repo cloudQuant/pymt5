@@ -11,9 +11,9 @@ author = "cloudQuant"
 
 try:
     from importlib.metadata import version as _pkg_version
-    release = _pkg_version("pymt5")
+    release = _pkg_version("mt5-web-client")
 except Exception:
-    release = "0.7.0"
+    release = "1.0.3"
 
 extensions = [
     "sphinx.ext.autodoc",

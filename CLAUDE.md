@@ -99,7 +99,7 @@ Transport stores credentials and supports auto-reconnect with exponential backof
 
 - **Structured logging**: All modules use `get_logger()` from `_logging.py` (structlog if installed, stdlib fallback).
 - **Metrics**: Optional `MetricsCollector` protocol for connect/send/receive/disconnect events.
-- **Optional deps**: `pip install pymt5[structlog]` for structured logging, `pip install pymt5[pandas]` for DataFrame integration.
+- **Optional deps**: `pip install mt5-web-client[structlog]` for structured logging, `pip install mt5-web-client[pandas]` for DataFrame integration.
 
 ## Python Version
 

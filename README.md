@@ -121,7 +121,7 @@ Live-verified against MetaQuotes-Demo on 2026-03-16. The current official Web Te
 ## Install
 
 ```bash
-pip install pymt5
+pip install mt5-web-client
 ```
 
 Or install from source:

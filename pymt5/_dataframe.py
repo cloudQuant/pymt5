@@ -4,7 +4,7 @@ Provides :func:`to_dataframe` for converting record lists returned by
 market data methods (``get_rates``, ``copy_rates_*``, ``copy_ticks_*``)
 into pandas DataFrames.
 
-Requires ``pip install pymt5[pandas]``.
+Requires ``pip install mt5-web-client[pandas]``.
 """
 
 from __future__ import annotations
@@ -26,6 +26,6 @@ def to_dataframe(records: list[dict[str, Any]]) -> Any:
         import pandas as pd  # type: ignore[import-untyped]
     except ImportError:
         raise ImportError(
-            "pandas is required for DataFrame conversion. Install it with: pip install pymt5[pandas]"
+            "pandas is required for DataFrame conversion. Install it with: pip install mt5-web-client[pandas]"
         ) from None
     return pd.DataFrame(records)
