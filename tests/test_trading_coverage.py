@@ -1923,7 +1923,7 @@ async def test_detect_close_direction_sell_position():
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_POSITIONS_ORDERS, code=0, body=combined)
     )
-    result = await client._detect_close_direction(999)
+    result = await client._detect_close_direction(999, "EURUSD")
     assert result == ORDER_TYPE_BUY
 
 
@@ -1944,12 +1944,12 @@ async def test_detect_close_direction_buy_position():
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_POSITIONS_ORDERS, code=0, body=combined)
     )
-    result = await client._detect_close_direction(999)
+    result = await client._detect_close_direction(999, "EURUSD")
     assert result == ORDER_TYPE_SELL
 
 
 async def test_detect_close_direction_not_found():
-    """Test _detect_close_direction defaults to SELL when position not found."""
+    """Reject a close when the position is missing."""
     client = _make_client()
     pos_body = _build_position_body(
         [
@@ -1965,8 +1965,8 @@ async def test_detect_close_direction_not_found():
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_POSITIONS_ORDERS, code=0, body=combined)
     )
-    result = await client._detect_close_direction(999)
-    assert result == ORDER_TYPE_SELL
+    with pytest.raises(ValueError, match="not found"):
+        await client._detect_close_direction(999, "EURUSD")
 
 
 # =====================================================================

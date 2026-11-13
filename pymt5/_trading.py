@@ -89,6 +89,7 @@ class _TradingMixin:
     transport: MT5WebSocketTransport
     _symbols: dict[str, SymbolInfo]
     _last_error: tuple[int, str]
+    _trade_protocol: str = "legacy"
 
     if TYPE_CHECKING:
 
@@ -433,10 +434,8 @@ class _TradingMixin:
                 (PROP_F64, price_sl),
                 (PROP_F64, price_tp),
                 (PROP_U64, deviation),
-                # Build 6090+ reserves 12 bytes here (observed as zeros in
-                # official web UI captures). Without them the server drops
-                # the request and comment/position_id misalign.
-                (PROP_BYTES, bytes(12)),
+                # Build 6090 reserves 12 bytes here in observed captures.
+                *([(PROP_BYTES, bytes(12))] if self._trade_protocol == "build_6090" else []),
                 (PROP_FIXED_STRING, comment[:32], 64),
                 (PROP_U64, position_id),
                 (PROP_U64, position_by),
@@ -634,7 +633,7 @@ class _TradingMixin:
         action = int(request.get("action", 0) or 0)
         symbol = str(request.get("symbol", "") or "")
         symbol_info = await self.symbol_info(symbol) if symbol else None
-        if action in {TRADE_ACTION_DEAL, TRADE_ACTION_PENDING}:
+        if action in {TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING}:
             result = await self._validate_deal_or_pending(request, symbol_info)
             if result is not None:
                 return result
@@ -656,7 +655,7 @@ class _TradingMixin:
 
     async def _estimate_order_margin(self, request: Record) -> float:
         action = int(request.get("action", 0) or 0)
-        if action not in {TRADE_ACTION_DEAL, TRADE_ACTION_PENDING}:
+        if action not in {TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING}:
             return 0.0
         price = await self._resolve_order_check_price(
             request,

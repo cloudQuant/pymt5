@@ -693,14 +693,14 @@ def test_parse_rate_bars_standard_still_works():
 # ---- Close Position Direction Detection ----
 
 
-def test_detect_close_direction_defaults_to_sell():
+def test_detect_close_direction_fails_if_positions_cannot_be_queried():
     client = MT5WebClient()
     import asyncio
 
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(client._detect_close_direction(999))
-        assert result == ORDER_TYPE_SELL
+        with pytest.raises(ValueError, match="unable to query positions"):
+            loop.run_until_complete(client._detect_close_direction(999, "EURUSD"))
     finally:
         loop.close()
 
