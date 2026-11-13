@@ -25,6 +25,10 @@ logger = get_logger("pymt5.transport")
 
 # Cache inspect.signature result at module level (Phase 3.5)
 _WS_CONNECT_HAS_PROXY = "proxy" in _inspect.signature(websockets.connect).parameters
+_WEB_TERMINAL_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 Chrome/129.0.0.0 Safari/537.36"
+)
 
 
 class TransportState(enum.Enum):
@@ -105,6 +109,8 @@ class MT5WebSocketTransport:
             "ping_interval": None,
             "max_size": None,
             "open_timeout": self.timeout,
+            # Some Web Terminal gateways reject the default Python client identity.
+            "user_agent_header": _WEB_TERMINAL_USER_AGENT,
             "additional_headers": {
                 "Origin": "https://web.metatrader.app",
             },

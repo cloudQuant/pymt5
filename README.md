@@ -8,6 +8,8 @@
 
 Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary protocol.
 
+See the [changelog](docs/changelog.rst) for releases and subsequent changes.
+
 ## Requirements
 
 - **Python 3.11+** (3.11, 3.12, 3.13)
@@ -43,11 +45,23 @@ Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary p
 - **`get_symbol_groups` (cmd=9)** — category tree (Forex, Crypto, Indexes, etc.)
 - `get_full_symbol_info` (cmd=18) — detailed contract specs (tick size, margins, volumes, bond face value/accrued interest, trade schedule, subscription flags)
 - **`get_spreads` (cmd=20)** — spread data with proper schema parsing
-- `get_rates` (cmd=11) — historical OHLCV bars (M1 to MN1), auto-detects extended format with `real_volume`
+- `get_rates` (cmd=11) — historical OHLCV bars (M1 to MN1), with standard and extended formats
 - `subscribe_ticks` (cmd=7) — real-time tick push (cmd=8) with callback
 - `subscribe_symbols` — name-based tick subscription (resolves names via symbol cache)
 - **`subscribe_book` (cmd=22)** — order book / depth-of-market subscription
 - **`subscribe_book_by_name`** — name-based order book subscription
+
+By default, rate responses are decoded automatically only when their length uniquely
+identifies the 48-byte standard or 56-byte extended format. Lengths divisible by both,
+or by neither, raise `ProtocolError` rather than guessing. This is a behavior
+change for ambiguous or mismatched responses. Select the format confirmed for your
+server with `MT5WebClient(rate_bar_format="standard")` or `"extended"`; alternatively,
+pass `bar_format="standard"` or `"extended"` to `get_rates()` or the `copy_rates_*()`
+wrappers. The extended format includes `real_volume`. `get_rates_raw()` can help inspect
+an unknown response, but length alone does not identify an ambiguous format. Both
+`get_rates()` and `get_rates_raw()` raise `ProtocolError` for nonzero server response codes.
+Length validation cannot detect truncation or an incorrect format selection when the
+resulting size happens to match the selected record size.
 
 ### Official MetaTrader5-style Helpers
 - Session/account: `initialize`, `shutdown`, `account_info`, `terminal_info`, `version`
@@ -185,6 +199,11 @@ async def main():
 
 asyncio.run(main())
 ```
+
+Calling `login()` while already logged in raises `SessionError`; call `logout()`
+before switching accounts. A successful `logout()` clears stored reconnect
+credentials. A rejected logout raises `SessionError` and retains the current
+session state and credentials.
 
 ## Trading Examples
 

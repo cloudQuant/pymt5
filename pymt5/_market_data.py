@@ -28,6 +28,7 @@ from pymt5._parsers import (
     _parse_rate_bars,
     _tick_matches_copy_flags,
     _to_copy_tick_record,
+    _validate_rate_bar_format,
 )
 from pymt5._subscription import SubscriptionHandle
 from pymt5._validation import validate_symbol_name
@@ -46,7 +47,7 @@ from pymt5.constants import (
     PROP_I32,
     PROP_U16,
 )
-from pymt5.exceptions import SymbolNotFoundError, ValidationError
+from pymt5.exceptions import ProtocolError, SymbolNotFoundError, ValidationError
 from pymt5.protocol import SeriesCodec, get_series_size
 from pymt5.schemas import (
     FULL_SYMBOL_FIELD_NAMES,
@@ -78,6 +79,7 @@ class _MarketDataMixin(_CurrencyMixin):
 
     # Attributes provided by MT5WebClient.__init__
     transport: MT5WebSocketTransport
+    _rate_bar_format: str = "auto"
     _symbols: dict[str, SymbolInfo]
     _symbols_by_id: dict[int, SymbolInfo]
     _full_symbols: dict[str, Record]
@@ -482,7 +484,9 @@ class _MarketDataMixin(_CurrencyMixin):
             "limit_per_symbol": self._tick_history_limit,
         }
 
-    async def get_rates(self, symbol: str, period_minutes: int, from_ts: int, to_ts: int) -> RecordList:
+    async def get_rates(
+        self, symbol: str, period_minutes: int, from_ts: int, to_ts: int, *, bar_format: str | None = None
+    ) -> RecordList:
         """Get kline/rate bars.
 
         Args:
@@ -490,10 +494,14 @@ class _MarketDataMixin(_CurrencyMixin):
             period_minutes: Bar period in minutes (1, 5, 15, 30, 60, 240, 1440, 10080, 43200)
             from_ts: Start time as UNIX seconds
             to_ts: End time as UNIX seconds
+            bar_format: Override the client format: "auto", "standard", or "extended".
 
         Returns:
-            List of bar dicts with keys: time, open, high, low, close, tick_volume, spread, real_volume
+            List of bar dicts with time, open, high, low, close, tick_volume,
+            and spread; extended bars also include real_volume.
         """
+        selected_format = self._rate_bar_format if bar_format is None else bar_format
+        _validate_rate_bar_format(selected_format)
         mapped = PERIOD_MAP.get(period_minutes, period_minutes)
         payload = SeriesCodec.serialize(
             [
@@ -504,7 +512,9 @@ class _MarketDataMixin(_CurrencyMixin):
             ]
         )
         result = await self.transport.send_command(CMD_GET_RATES, payload)
-        return _parse_rate_bars(result.body)
+        if result.code != 0:
+            raise ProtocolError(f"MT5 Web Terminal rejected rates request (response code {result.code})")
+        return _parse_rate_bars(result.body, selected_format)
 
     async def get_rates_raw(self, symbol: str, period_minutes: int, from_ts: int, to_ts: int) -> bytes:
         """Get raw rate bytes (for debugging)."""
@@ -518,6 +528,8 @@ class _MarketDataMixin(_CurrencyMixin):
             ]
         )
         result = await self.transport.send_command(CMD_GET_RATES, payload)
+        if result.code != 0:
+            raise ProtocolError(f"MT5 Web Terminal rejected rates request (response code {result.code})")
         return result.body
 
     async def copy_rates_range(
@@ -526,6 +538,8 @@ class _MarketDataMixin(_CurrencyMixin):
         timeframe: int,
         date_from: int | float | datetime,
         date_to: int | float | datetime,
+        *,
+        bar_format: str | None = None,
     ) -> RecordList:
         """Official-style range wrapper for cmd=11 bars."""
         period_minutes = _normalize_timeframe_minutes(timeframe)
@@ -534,6 +548,7 @@ class _MarketDataMixin(_CurrencyMixin):
             period_minutes,
             _coerce_timestamp(date_from),
             _coerce_timestamp(date_to),
+            **({} if bar_format is None else {"bar_format": bar_format}),
         )
 
     async def copy_rates_from(
@@ -542,14 +557,21 @@ class _MarketDataMixin(_CurrencyMixin):
         timeframe: int,
         date_from: int | float | datetime,
         count: int,
+        *,
+        bar_format: str | None = None,
     ) -> RecordList:
         """Best-effort official-style wrapper returning bars up to date_from."""
+        if bar_format is not None:
+            _validate_rate_bar_format(bar_format)
         if count <= 0:
             return []
         period_minutes = _normalize_timeframe_minutes(timeframe)
         end_ts = _coerce_timestamp(date_from)
         lookback = _history_lookback_seconds(period_minutes, count)
-        bars = await self.get_rates(symbol, period_minutes, max(0, end_ts - lookback), end_ts)
+        bars = await self.get_rates(
+            symbol, period_minutes, max(0, end_ts - lookback), end_ts,
+            **({} if bar_format is None else {"bar_format": bar_format}),
+        )
         return bars[-count:]
 
     async def copy_rates_from_pos(
@@ -558,8 +580,12 @@ class _MarketDataMixin(_CurrencyMixin):
         timeframe: int,
         start_pos: int,
         count: int,
+        *,
+        bar_format: str | None = None,
     ) -> RecordList:
         """Best-effort current-bar-relative wrapper built on cmd=11 history."""
+        if bar_format is not None:
+            _validate_rate_bar_format(bar_format)
         if start_pos < 0:
             raise ValidationError(f"start_pos must be >= 0, got {start_pos}")
         if count <= 0:
@@ -567,7 +593,10 @@ class _MarketDataMixin(_CurrencyMixin):
         period_minutes = _normalize_timeframe_minutes(timeframe)
         end_ts = int(datetime.now().timestamp())
         lookback = _history_lookback_seconds(period_minutes, start_pos + count)
-        bars = await self.get_rates(symbol, period_minutes, max(0, end_ts - lookback), end_ts)
+        bars = await self.get_rates(
+            symbol, period_minutes, max(0, end_ts - lookback), end_ts,
+            **({} if bar_format is None else {"bar_format": bar_format}),
+        )
         if not bars:
             return []
         end_index = max(0, len(bars) - start_pos)

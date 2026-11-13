@@ -14,8 +14,8 @@ import pytest
 
 from pymt5.client import MT5WebClient
 from pymt5.constants import CMD_LOGIN, CMD_LOGOUT, CMD_PING
-from pymt5.exceptions import MT5ConnectionError, SessionError
-from pymt5.transport import CommandResult
+from pymt5.exceptions import AuthenticationError, MT5ConnectionError, ProtocolError, SessionError
+from pymt5.transport import CommandResult, MT5WebSocketTransport
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,6 +31,32 @@ def _make_login_body() -> bytes:
 
 def _ok_result(command: int = 0) -> CommandResult:
     return CommandResult(command=command, code=0, body=b"")
+
+
+class _StatefulReconnectTransport(MT5WebSocketTransport):
+    """Use the real ready/close/send guards with a controllable login response."""
+
+    def __init__(self, *, fail_close: bool = False) -> None:
+        super().__init__(uri="wss://example.com")
+        self.fail_close = fail_close
+        self.socket = MagicMock()
+        self.socket.close = AsyncMock()
+
+    async def connect(self) -> None:
+        self.ws = self.socket
+        self.is_ready = True
+
+    async def close(self) -> None:
+        if self._on_disconnect:
+            self._on_disconnect()
+        if self.fail_close:
+            raise RuntimeError("close failed")
+        await super().close()
+
+    async def send_command(self, command: int, payload: bytes | None = None) -> CommandResult:
+        if command == CMD_LOGIN and self.is_ready:
+            return CommandResult(command=CMD_LOGIN, code=0, body=_make_login_body())
+        return await super().send_command(command, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +550,174 @@ async def test_reconnect_loop_succeeds_on_second_attempt():
     client.login.assert_awaited_once()
 
 
+@pytest.mark.parametrize("failure", ["login", "subscribe"])
+async def test_reconnect_real_login_retries_after_failure(failure: str):
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=2, reconnect_delay=0)
+    client._login_kwargs = {"login": 456, "password": "pw"}
+    client.transport.close = AsyncMock()
+    if failure == "subscribe":
+        client._subscribed_ids = [1]
+        client.subscribe_ticks = AsyncMock(side_effect=[SessionError("subscription failed"), None])
+
+    transports = []
+    for index in range(2):
+        transport = MagicMock()
+        transport.connect = AsyncMock()
+        transport.close = AsyncMock()
+        code = 3 if failure == "login" and index == 0 else 0
+        transport.send_command = AsyncMock(
+            return_value=CommandResult(command=CMD_LOGIN, code=code, body=_make_login_body())
+        )
+        transports.append(transport)
+
+    with patch("pymt5.client.MT5WebSocketTransport", side_effect=transports):
+        await client._reconnect_loop()
+
+    for transport in transports:
+        assert transport.send_command.await_count == 1
+        assert transport.send_command.await_args.args[0] == CMD_LOGIN
+    assert client._logged_in is True
+    assert client._login_kwargs is not None
+    assert client._login_kwargs["login"] == 456
+    assert client._login_kwargs["password"] == "pw"
+    assert client._reconnect_count == 1
+    client._stop_heartbeat()
+
+
+async def test_reconnect_exhausted_after_subscribe_failure_clears_login_state():
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0)
+    client._login_kwargs = {"login": 456, "password": "pw"}
+    client._subscribed_ids = [1]
+    client.subscribe_ticks = AsyncMock(side_effect=SessionError("subscription failed"))
+    client.transport.close = AsyncMock()
+    transport = MagicMock()
+    transport.connect = AsyncMock()
+    transport.close = AsyncMock()
+    transport.send_command = AsyncMock(
+        return_value=CommandResult(command=CMD_LOGIN, code=0, body=_make_login_body())
+    )
+    with patch("pymt5.client.MT5WebSocketTransport", return_value=transport):
+        await client._reconnect_loop()
+    assert client._logged_in is False
+    assert client._heartbeat_task is None
+    assert client._login_kwargs is not None
+    assert client._login_kwargs["login"] == 456
+
+
+@pytest.mark.parametrize("fail_close", [False, True])
+async def test_reconnect_exhausted_disables_authenticated_transport(fail_close: bool):
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0)
+    client._login_kwargs = {"login": 456, "password": "pw"}
+    client._subscribed_ids = [1]
+    client.subscribe_ticks = AsyncMock(side_effect=SessionError("subscription failed"))
+    transport = _StatefulReconnectTransport(fail_close=fail_close)
+    with patch("pymt5.client.MT5WebSocketTransport", return_value=transport):
+        await client._reconnect_loop()
+    assert not transport.is_ready
+    assert transport._on_disconnect is None
+    assert client._reconnect_task is None
+    assert client._login_kwargs is not None
+    with pytest.raises(SessionError, match="transport not ready"):
+        await client.trade_request(trade_action=1, volume=1)
+    if not fail_close:
+        transport.socket.close.assert_awaited_once()
+
+
+async def test_cancelled_reconnect_disables_authenticated_transport():
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0)
+    client._login_kwargs = {"login": 456, "password": "pw"}
+    client._subscribed_ids = [1]
+    started = asyncio.Event()
+
+    async def wait_for_subscription(_ids):
+        started.set()
+        await asyncio.Event().wait()
+
+    client.subscribe_ticks = AsyncMock(side_effect=wait_for_subscription)
+    transport = _StatefulReconnectTransport()
+    with patch("pymt5.client.MT5WebSocketTransport", return_value=transport):
+        task = asyncio.create_task(client._reconnect_loop())
+        client._reconnect_task = task
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert not transport.is_ready
+    assert transport._on_disconnect is None
+    assert client._login_kwargs is not None
+    with pytest.raises(SessionError, match="transport not ready"):
+        await client.trade_request(trade_action=1, volume=1)
+    transport.socket.close.assert_awaited_once()
+
+
+async def test_cancellation_during_failure_cleanup_waits_for_transport_close():
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0)
+    client._login_kwargs = {"login": 456, "password": "pw"}
+    client._subscribed_ids = [1]
+    client.subscribe_ticks = AsyncMock(side_effect=SessionError("subscription failed"))
+    close_started = asyncio.Event()
+    allow_close = asyncio.Event()
+    close_cancelled = False
+    transport = _StatefulReconnectTransport()
+
+    async def delayed_close():
+        nonlocal close_cancelled
+        close_started.set()
+        try:
+            await allow_close.wait()
+        except asyncio.CancelledError:
+            close_cancelled = True
+            raise
+
+    transport.socket.close = AsyncMock(side_effect=delayed_close)
+    with patch("pymt5.client.MT5WebSocketTransport", return_value=transport):
+        task = asyncio.create_task(client._reconnect_loop())
+        client._reconnect_task = task
+        await close_started.wait()
+        assert not transport.is_ready
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not close_cancelled
+        allow_close.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    transport.socket.close.assert_awaited_once()
+    assert not close_cancelled
+    assert transport.ws is None
+    assert not transport.is_ready
+    with pytest.raises(SessionError, match="transport not ready"):
+        await client.trade_request(trade_action=1, volume=1)
+
+
+async def test_reconnect_close_timeout_remains_nonready():
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0, timeout=0.05)
+    client._login_kwargs = {"login": 456, "password": "pw"}
+    client._subscribed_ids = [1]
+    client.subscribe_ticks = AsyncMock(side_effect=SessionError("subscription failed"))
+    close_cancelled = asyncio.Event()
+    transport = _StatefulReconnectTransport()
+
+    async def never_close():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            close_cancelled.set()
+            raise
+
+    transport.socket.close = AsyncMock(side_effect=never_close)
+    with patch("pymt5.client.MT5WebSocketTransport", return_value=transport):
+        await asyncio.wait_for(client._reconnect_loop(), timeout=1)
+        await asyncio.wait_for(close_cancelled.wait(), timeout=1)
+    assert not transport.is_ready
+    assert transport._on_disconnect is None
+    with pytest.raises(SessionError, match="transport not ready"):
+        await client.trade_request(trade_action=1, volume=1)
+
+
 async def test_reconnect_loop_no_resubscribe_without_subscriptions():
     """_reconnect_loop skips re-subscribe when lists are empty."""
     client = MT5WebClient(
@@ -653,6 +847,275 @@ async def test_login_stores_credentials():
     assert client._login_kwargs["login"] == 999
     assert client._login_kwargs["password"] == "pw123"
     assert client._login_kwargs["url"] == "https://example.com"
+
+
+@pytest.mark.parametrize("body", [b"", _make_login_body()])
+async def test_login_rejection_reports_response_code_without_authenticating(body: bytes):
+    client = MT5WebClient()
+    client.transport.send_command = AsyncMock(
+        return_value=CommandResult(command=CMD_LOGIN, code=3, body=body),
+    )
+    client._start_heartbeat = MagicMock()
+    with pytest.raises(AuthenticationError, match="response code 3"):
+        await client.login(login=999, password="invalid")
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    client._start_heartbeat.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [b"", _make_login_body()[:-1]])
+async def test_login_success_with_truncated_body_is_protocol_error(body: bytes):
+    client = MT5WebClient()
+    client.transport.send_command = AsyncMock(
+        return_value=CommandResult(command=CMD_LOGIN, code=0, body=body),
+    )
+    client._start_heartbeat = MagicMock()
+    with pytest.raises(ProtocolError, match="buffer too short"):
+        await client.login(login=999, password="pw")
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    client._start_heartbeat.assert_not_called()
+
+
+async def test_login_while_logged_in_requires_logout_without_sending():
+    client = MT5WebClient()
+    client._logged_in = True
+    client._login_kwargs = {"login": 123, "password": "old"}
+    client.transport.send_command = AsyncMock()
+    with pytest.raises(SessionError, match="logout"):
+        await client.login(login=456, password="new")
+    client.transport.send_command.assert_not_awaited()
+    assert client._logged_in is True
+    assert client._login_kwargs == {"login": 123, "password": "old"}
+
+
+async def test_logout_waits_for_inflight_login_then_invalidates_session():
+    client = MT5WebClient()
+    login_sent = asyncio.Event()
+    release_login = asyncio.Event()
+    logout_started = asyncio.Event()
+    sent = []
+
+    async def send(command, payload=None):
+        sent.append(command)
+        if command == CMD_LOGIN:
+            login_sent.set()
+            await release_login.wait()
+            return CommandResult(command=command, code=0, body=_make_login_body())
+        return _ok_result(command)
+
+    async def logout():
+        logout_started.set()
+        await client.logout()
+
+    client.transport.send_command = AsyncMock(side_effect=send)
+    login_task = asyncio.create_task(client.login(login=123, password="old", auto_heartbeat=False))
+    await login_sent.wait()
+    logout_task = asyncio.create_task(logout())
+    await logout_started.wait()
+    assert sent == [CMD_LOGIN]
+    assert not logout_task.done()
+    release_login.set()
+    await asyncio.gather(login_task, logout_task)
+    assert sent == [CMD_LOGIN, CMD_LOGOUT]
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    await client.login(login=456, password="new", auto_heartbeat=False)
+    assert client._login_kwargs is not None
+    assert client._login_kwargs["login"] == 456
+
+
+async def test_close_waits_for_inflight_login_then_closes_session():
+    client = MT5WebClient()
+    transport = _StatefulReconnectTransport()
+    await transport.connect()
+    client.transport = transport
+    login_sent = asyncio.Event()
+    release_login = asyncio.Event()
+    close_started = asyncio.Event()
+    normal_send = transport.send_command
+    sent = []
+
+    async def send(command, payload=None):
+        sent.append(command)
+        if command == CMD_LOGIN:
+            login_sent.set()
+            await release_login.wait()
+            return await normal_send(command, payload)
+        if command == CMD_LOGOUT:
+            return _ok_result(CMD_LOGOUT)
+        return await normal_send(command, payload)
+
+    async def close():
+        close_started.set()
+        await client.close()
+
+    transport.send_command = AsyncMock(side_effect=send)
+    login_task = asyncio.create_task(client.login(login=123, password="old", auto_heartbeat=False))
+    await login_sent.wait()
+    close_task = asyncio.create_task(close())
+    await close_started.wait()
+    assert not close_task.done()
+    assert sent == [CMD_LOGIN]
+    release_login.set()
+    await asyncio.gather(login_task, close_task)
+    assert sent == [CMD_LOGIN, CMD_LOGOUT]
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    assert not transport.is_ready
+    with pytest.raises(SessionError, match="transport not ready"):
+        await client.trade_request(trade_action=1, volume=1)
+
+
+async def test_close_stops_late_heartbeat_if_logout_fails():
+    client = MT5WebClient()
+    transport = _StatefulReconnectTransport()
+    await transport.connect()
+    client.transport = transport
+    login_sent = asyncio.Event()
+    release_login = asyncio.Event()
+    close_started = asyncio.Event()
+    normal_send = transport.send_command
+    heartbeats = []
+    start_heartbeat = client._start_heartbeat
+
+    def record_heartbeat():
+        start_heartbeat()
+        heartbeats.append(client._heartbeat_task)
+
+    async def send(command, payload=None):
+        if command == CMD_LOGIN:
+            login_sent.set()
+            await release_login.wait()
+            return await normal_send(command, payload)
+        if command == CMD_LOGOUT:
+            raise SessionError("logout failed")
+        return await normal_send(command, payload)
+
+    async def close():
+        close_started.set()
+        await client.close()
+
+    client._start_heartbeat = record_heartbeat
+    transport.send_command = AsyncMock(side_effect=send)
+    login_task = asyncio.create_task(client.login(login=123, password="old", auto_heartbeat=True))
+    await login_sent.wait()
+    close_task = asyncio.create_task(close())
+    await close_started.wait()
+    assert not close_task.done()
+    release_login.set()
+    await asyncio.gather(login_task, close_task)
+    await asyncio.sleep(0)
+    assert len(heartbeats) == 1
+    assert heartbeats[0] is not None and heartbeats[0].done()
+    assert client._heartbeat_task is None
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    assert not transport.is_ready
+
+
+async def test_logout_cancels_inflight_reconnect_without_reauthenticating_old_account():
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0)
+    client._login_kwargs = {"login": 123, "password": "old"}
+    client._subscribed_ids = [1]
+    started = asyncio.Event()
+
+    async def wait_for_subscription(_ids):
+        started.set()
+        await asyncio.Event().wait()
+
+    client.subscribe_ticks = AsyncMock(side_effect=wait_for_subscription)
+    transport = _StatefulReconnectTransport()
+    with patch("pymt5.client.MT5WebSocketTransport", return_value=transport):
+        reconnect = asyncio.create_task(client._reconnect_loop())
+        client._reconnect_task = reconnect
+        await started.wait()
+        await client.logout()
+    assert reconnect.cancelled()
+    assert client._reconnect_task is None
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    assert not transport.is_ready
+    with pytest.raises(SessionError, match="transport not ready"):
+        await client.trade_request(trade_action=1, volume=1)
+    # A caller can reconnect explicitly and then log in with new credentials.
+    await transport.connect()
+    await client.login(login=456, password="new", auto_heartbeat=False)
+    assert client._logged_in is True
+    assert client._login_kwargs is not None
+    assert client._login_kwargs["login"] == 456
+
+
+async def test_logout_during_reconnect_login_prevents_late_old_session():
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0)
+    client._login_kwargs = {"login": 123, "password": "old"}
+    client._subscribed_ids = [1]
+    login_sent = asyncio.Event()
+    release_login = asyncio.Event()
+    logout_started = asyncio.Event()
+    transport = _StatefulReconnectTransport()
+    normal_send = transport.send_command
+
+    async def delayed_send(command, payload=None):
+        if command == CMD_LOGIN:
+            login_sent.set()
+            await release_login.wait()
+        return await normal_send(command, payload)
+
+    async def wait_for_subscription(_ids):
+        await asyncio.Event().wait()
+
+    async def logout():
+        logout_started.set()
+        await client.logout()
+
+    transport.send_command = AsyncMock(side_effect=delayed_send)
+    client.subscribe_ticks = AsyncMock(side_effect=wait_for_subscription)
+    with patch("pymt5.client.MT5WebSocketTransport", return_value=transport):
+        reconnect = asyncio.create_task(client._reconnect_loop())
+        client._reconnect_task = reconnect
+        await login_sent.wait()
+        logout_task = asyncio.create_task(logout())
+        await logout_started.wait()
+        assert not logout_task.done()
+        release_login.set()
+        await logout_task
+    assert reconnect.cancelled()
+    assert not transport.is_ready
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    with pytest.raises(SessionError, match="transport not ready"):
+        await client.trade_request(trade_action=1, volume=1)
+
+
+async def test_logout_clears_credentials_then_allows_new_login():
+    client = MT5WebClient(auto_reconnect=True)
+    client._logged_in = True
+    client._login_kwargs = {"login": 123, "password": "old"}
+    client.transport.send_command = AsyncMock(side_effect=[
+        _ok_result(CMD_LOGOUT),
+        CommandResult(command=CMD_LOGIN, code=0, body=_make_login_body()),
+    ])
+    await client.logout()
+    assert client._logged_in is False
+    assert client._login_kwargs is None
+    client._handle_disconnect()
+    assert client._reconnect_task is None
+    await client.login(login=456, password="new", auto_heartbeat=False)
+    assert client._logged_in is True
+    assert client._login_kwargs is not None
+    assert client._login_kwargs["login"] == 456
+
+
+async def test_logout_rejection_preserves_session_and_credentials():
+    client = MT5WebClient()
+    client._logged_in = True
+    client._login_kwargs = {"login": 123, "password": "old"}
+    client.transport.send_command = AsyncMock(return_value=CommandResult(command=CMD_LOGOUT, code=3, body=b""))
+    with pytest.raises(SessionError, match="response code 3"):
+        await client.logout()
+    assert client._logged_in is True
+    assert client._login_kwargs == {"login": 123, "password": "old"}
 
 
 # ---------------------------------------------------------------------------

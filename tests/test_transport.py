@@ -222,3 +222,19 @@ def test_ws_connect_has_proxy_is_bool():
     from pymt5.transport import _WS_CONNECT_HAS_PROXY
 
     assert isinstance(_WS_CONNECT_HAS_PROXY, bool)
+
+
+def test_connect_sends_web_terminal_user_agent(monkeypatch):
+    observed = {}
+
+    async def capture_connect(uri, **kwargs):
+        observed.update(kwargs)
+        raise RuntimeError("connection intercepted")
+
+    monkeypatch.setattr("pymt5.transport.websockets.connect", capture_connect)
+    transport = MT5WebSocketTransport(uri="wss://example.com/terminal")
+    with pytest.raises(RuntimeError, match="connection intercepted"):
+        asyncio.run(transport.connect())
+
+    assert observed["user_agent_header"].startswith("Mozilla/5.0")
+    assert observed["additional_headers"]["Origin"] == "https://web.metatrader.app"

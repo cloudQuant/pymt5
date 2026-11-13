@@ -1033,12 +1033,12 @@ def test_parse_rate_bars_extended_schema():
 
 
 def test_parse_rate_bars_safety_break():
-    """Cover line 494: body truncated midway through bars."""
+    """A truncated response is rejected rather than silently discarded."""
     # Build 1.5 bars worth of data -- the second bar is incomplete
     bar = struct.pack("<iddddqi", 1773293460, 1.15, 1.16, 1.14, 1.155, 57, 0)
     body = bar + b"\x00" * 20  # not enough for second full bar
-    bars = _parse_rate_bars(body)
-    assert len(bars) == 1
+    with pytest.raises(ProtocolError, match="does not match"):
+        _parse_rate_bars(body)
 
 
 # --- _parse_verification_status ---
