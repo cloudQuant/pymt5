@@ -56,7 +56,7 @@ Installation
 
 .. code-block:: bash
 
-   pip install pymt5
+   pip install mt5-web-client
 
 Or install from source:
 

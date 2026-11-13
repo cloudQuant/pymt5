@@ -1,6 +1,6 @@
 """Structured logging helper.
 
-If ``structlog`` is installed (``pip install pymt5[structlog]``), loggers
+If ``structlog`` is installed (``pip install mt5-web-client[structlog]``), loggers
 returned by :func:`get_logger` will use structlog's bound-logger API.
 Otherwise, the standard :mod:`logging` module is used as a zero-dependency
 fallback.

@@ -6,9 +6,9 @@ Reverse-engineered WebSocket binary protocol implementation.
 try:
     from importlib.metadata import version as _pkg_version
 
-    __version__ = _pkg_version("pymt5")
+    __version__ = _pkg_version("mt5-web-client")
 except ImportError:
-    __version__ = "1.0.1"
+    __version__ = "1.0.3"
 
 from pymt5._dataframe import to_dataframe
 from pymt5._metrics import MetricsCollector
