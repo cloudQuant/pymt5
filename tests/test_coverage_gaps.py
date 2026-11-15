@@ -11,7 +11,6 @@ import asyncio
 import importlib
 import struct
 import sys
-from collections import deque
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -118,15 +117,18 @@ class TestTransportMetricsCallbacks:
             # 2. Call connect which needs to exchange bootstrap
             # Let's mock _send_raw to return our bootstrap result.
             bootstrap_result = CommandResult(command=CMD_BOOTSTRAP, code=0, body=bootstrap_body)
+
+            async def idle_recv_loop(_ws, _generation) -> None:
+                await asyncio.Event().wait()
+
             with (
                 patch.object(t, "_send_raw", return_value=bootstrap_result),
-                patch.object(t, "_recv_loop", return_value=None),
-                patch("asyncio.create_task", return_value=MagicMock()),
+                patch.object(t, "_recv_loop", new=idle_recv_loop),
             ):
                 await t.connect()
-
-        assert metrics.connect_count == 1
-        assert t.state == TransportState.READY
+                assert metrics.connect_count == 1
+                assert t.state == TransportState.READY
+                await t.close()
 
     async def test_dispatch_metrics_on_command_received(self):
         """Cover line 209: self._metrics.on_command_received(frame.command, frame.code)"""
@@ -169,12 +171,13 @@ class TestTransportMetricsCallbacks:
         metrics = FakeMetrics()
         t = MT5WebSocketTransport(uri="wss://example.com", metrics=metrics)
 
-        mock_ws = AsyncMock()
-        # Simulate a WebSocket disconnect by raising ConnectionClosedError
         import websockets.exceptions
 
-        mock_ws.__aiter__ = MagicMock(side_effect=websockets.exceptions.ConnectionClosedError(None, None))
-        t.ws = mock_ws
+        class DisconnectedWebSocket:
+            def __aiter__(self):
+                raise websockets.exceptions.ConnectionClosedError(None, None)
+
+        t.ws = DisconnectedWebSocket()
         t._on_disconnect = None
 
         await t._recv_loop()
@@ -190,46 +193,30 @@ class TestTransportMetricsCallbacks:
 
 class TestTransportTimeoutCleanup:
     async def test_timeout_cleanup_future_already_removed(self):
-        """Cover lines 175-176: queue.remove(future) raises ValueError / pass.
-
-        We need the future to time out AND the future to no longer be in the
-        pending queue when the cleanup runs. We achieve this by replacing the
-        pending deque with a custom subclass that raises ValueError on remove.
-        """
+        """A consumed queue entry is harmless when timeout cleanup runs."""
         from pymt5.exceptions import MT5TimeoutError
 
-        class RemoveFailsDeque(deque):
-            """Deque subclass where remove() always raises ValueError."""
-
-            def remove(self, value):
-                raise ValueError("simulated: future already consumed")
-
-        metrics = FakeMetrics()
-        t = MT5WebSocketTransport(uri="wss://example.com", timeout=0.01, metrics=metrics)
+        t = MT5WebSocketTransport(uri="wss://example.com", timeout=0.01)
         t._state = TransportState.READY
 
-        mock_ws = AsyncMock()
-        mock_ws.send = AsyncMock()
-        t.ws = mock_ws
+        class ConsumingWebSocket:
+            def __init__(self) -> None:
+                self.send_count = 0
 
-        # Replace the defaultdict factory to produce our custom deque
-        class FailingPendingDict(dict):
-            """dict subclass that returns RemoveFailsDeque on get."""
+            async def send(self, data: bytes) -> None:
+                self.send_count += 1
+                # Simulate a dispatcher consuming the queue without resolving
+                # this future; timeout cleanup must still remove the empty key.
+                t._pending[CMD_BOOTSTRAP].clear()
 
-            def __missing__(self, key):
-                q = RemoveFailsDeque()
-                self[key] = q
-                return q
-
-            def get(self, key, default=None):
-                if key in self:
-                    return self[key]
-                return default
-
-        t._pending = FailingPendingDict()
+        ws = ConsumingWebSocket()
+        t.ws = ws
 
         with pytest.raises(MT5TimeoutError):
             await t.send_command(CMD_BOOTSTRAP)
+
+        assert ws.send_count == 1
+        assert CMD_BOOTSTRAP not in t._pending
 
 
 # =====================================================================
@@ -468,25 +455,21 @@ class TestTradeUpdatePushHandler:
 
 class TestGetFullSymbolInfoCatchBlock:
     async def test_get_full_symbol_info_catch_block(self):
-        """Cover lines 200-202: catch block when parsing raises error.
+        """Parsing failures are surfaced as protocol errors."""
+        from pymt5.schemas import FULL_SYMBOL_SCHEMA
+        from pymt5.types import SymbolInfo
 
-        We mock _parse_counted_records to raise a ValueError, which triggers
-        the except block on line 200.
-        """
         mixin = _create_market_data_mixin()
+        mixin._symbols["EURUSD"] = SymbolInfo(name="EURUSD", symbol_id=42, digits=5)
 
-        # Return a non-empty body so the code enters the try path
-        mock_result = CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=b"\x00" * 100)
+        body = struct.pack("<I", 1) + bytes(get_series_size(FULL_SYMBOL_SCHEMA))
+        mock_result = CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=body)
         mixin.transport.send_command = AsyncMock(return_value=mock_result)
-
-        # Patch _parse_counted_records to raise ValueError inside the try block
         with patch(
-            "pymt5._market_data._parse_counted_records",
+            "pymt5._market_data.SeriesCodec.parse_at",
             side_effect=ValueError("mocked parse error"),
-        ):
-            result = await mixin.get_full_symbol_info("EURUSD")
-
-        assert result is None
+        ), pytest.raises(ProtocolError, match="invalid full symbol response record"):
+            await mixin.get_full_symbol_info("EURUSD")
 
 
 # =====================================================================
@@ -702,7 +685,7 @@ class TestInitImportErrorFallback:
         """Cover lines 10-11: ImportError fallback for importlib.metadata.
 
         We reload pymt5.__init__ with importlib.metadata blocked so the
-        except ImportError branch executes and sets __version__ = "1.0.4".
+        except ImportError branch executes and sets __version__ = "1.1.0".
         """
         import pymt5
 
@@ -712,7 +695,7 @@ class TestInitImportErrorFallback:
             # Setting a module to None in sys.modules causes ImportError
             sys.modules["importlib.metadata"] = None  # type: ignore[assignment]
             importlib.reload(pymt5)
-            assert pymt5.__version__ == "1.0.4"
+            assert pymt5.__version__ == "1.1.0"
         finally:
             # Restore
             if real_metadata is not None:
@@ -765,6 +748,7 @@ def _create_market_data_mixin():
     obj._book_cache_by_id = {}
     obj._book_cache_by_name = {}
     obj._subscribed_ids = []
+    obj._tick_subscription_lock = asyncio.Lock()
     obj._subscribed_book_ids = []
     return obj
 

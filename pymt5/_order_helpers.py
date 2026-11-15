@@ -119,7 +119,7 @@ class _OrderHelpersMixin:
         action_id: int = 0,
         type_flags: int = 0,
     ) -> TradeResult:
-        """Internal helper for all order placement methods."""
+        """Validate and submit an order through the low-level trade API."""
         validate_symbol_name(symbol)
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING):
             validate_volume(volume)
@@ -352,11 +352,29 @@ class _OrderHelpersMixin:
         digits: int | None = None,
         magic: int = 0,
     ) -> TradeResult:
-        """Place a buy stop limit pending order.
+        """Place a buy stop-limit pending order.
 
         Args:
-            price: Stop trigger price (price_trigger).
-            stop_limit_price: Limit price placed after stop triggers (price_order).
+            symbol: Symbol to trade.
+            volume: Order volume in lots.
+            price: Stop price that triggers the limit order.
+            stop_limit_price: Limit price used after the stop is triggered.
+            sl: Stop-loss price, or ``0.0`` when not set.
+            tp: Take-profit price, or ``0.0`` when not set.
+            comment: Optional order comment.
+            filling: Numeric order filling mode.
+            time_type: Numeric order expiration policy.
+            expiration: Expiration timestamp for applicable expiration policies.
+            digits: Price precision override, or ``None`` to resolve it from
+                the symbol metadata.
+            magic: Caller-defined order identifier.
+
+        Returns:
+            The parsed trade response.
+
+        Raises:
+            ValidationError: If the symbol, volume, or limit price is invalid.
+
         """
         return await self._place_order(
             trade_action=TRADE_ACTION_PENDING,
@@ -391,11 +409,29 @@ class _OrderHelpersMixin:
         digits: int | None = None,
         magic: int = 0,
     ) -> TradeResult:
-        """Place a sell stop limit pending order.
+        """Place a sell stop-limit pending order.
 
         Args:
-            price: Stop trigger price (price_trigger).
-            stop_limit_price: Limit price placed after stop triggers (price_order).
+            symbol: Symbol to trade.
+            volume: Order volume in lots.
+            price: Stop price that triggers the limit order.
+            stop_limit_price: Limit price used after the stop is triggered.
+            sl: Stop-loss price, or ``0.0`` when not set.
+            tp: Take-profit price, or ``0.0`` when not set.
+            comment: Optional order comment.
+            filling: Numeric order filling mode.
+            time_type: Numeric order expiration policy.
+            expiration: Expiration timestamp for applicable expiration policies.
+            digits: Price precision override, or ``None`` to resolve it from
+                the symbol metadata.
+            magic: Caller-defined order identifier.
+
+        Returns:
+            The parsed trade response.
+
+        Raises:
+            ValidationError: If the symbol, volume, or limit price is invalid.
+
         """
         return await self._place_order(
             trade_action=TRADE_ACTION_PENDING,

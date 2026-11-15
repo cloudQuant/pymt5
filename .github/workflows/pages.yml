@@ -31,10 +31,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[docs]"
 
-      - name: Build Sphinx docs
-        working-directory: docs
+      - name: Build bilingual Sphinx docs
         run: |
-          python -m sphinx . _build/html -W --keep-going
+          python docs/build_docs.py
+
+      - name: Check generated documentation
+        run: |
+          python docs/check_docs.py
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

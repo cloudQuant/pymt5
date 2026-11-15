@@ -29,6 +29,7 @@ from pymt5.constants import (
     CMD_SUBSCRIBE_BOOK,
     CMD_SUBSCRIBE_TICKS,
 )
+from pymt5.exceptions import ProtocolError
 from pymt5.helpers import encode_utf16le
 from pymt5.protocol import get_series_size
 from pymt5.schemas import (
@@ -480,74 +481,76 @@ async def test_symbols_get_with_group_filters():
 # ===========================================================================
 
 
-async def test_get_full_symbol_info_empty_body():
-    """get_full_symbol_info returns None on empty body (line 183)."""
+def _full_symbol_client() -> MT5WebClient:
     client = MT5WebClient()
+    client._symbols["EURUSD"] = SymbolInfo(name="EURUSD", symbol_id=42, digits=5)
+    return client
+
+
+def _full_symbol_body(name: str = "EURUSD", symbol_id: int = 42) -> bytes:
+    record = bytearray(get_series_size(FULL_SYMBOL_SCHEMA))
+    record[:64] = encode_utf16le(name, 64)
+    struct.pack_into("<I", record, get_series_size(FULL_SYMBOL_SCHEMA[:24]), symbol_id)
+    return struct.pack("<I", 1) + record
+
+
+async def test_get_full_symbol_info_empty_body():
+    """A successful response without a count is malformed."""
+    client = _full_symbol_client()
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=b""),
     )
-    result = await client.get_full_symbol_info("EURUSD")
-    assert result is None
+    with pytest.raises(ProtocolError, match="missing its count"):
+        await client.get_full_symbol_info("EURUSD")
 
 
 async def test_get_full_symbol_info_counted_records():
     """get_full_symbol_info parses counted records path."""
-    client = MT5WebClient()
-    record_size = get_series_size(FULL_SYMBOL_SCHEMA)
-    # Build a counted-records body with 1 record
-    record_body = b"\x00" * record_size
-    body = struct.pack("<I", 1) + record_body
+    client = _full_symbol_client()
+    body = _full_symbol_body()
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=body),
     )
     result = await client.get_full_symbol_info("EURUSD")
+    client.transport.send_command.assert_awaited_once_with(CMD_GET_FULL_SYMBOLS, struct.pack("<II", 1, 42))
     assert result is not None
     assert isinstance(result, dict)
     assert "EURUSD" in client._full_symbols
 
 
-async def test_get_full_symbol_info_fallback_parse(monkeypatch):
-    """get_full_symbol_info falls back to direct parse when counted records returns empty (lines 189-194)."""
-    client = MT5WebClient()
-    record_size = get_series_size(FULL_SYMBOL_SCHEMA)
-    # Body that's large enough for one full symbol but with count=0
-    body = struct.pack("<I", 0) + b"\x00" * record_size
-    # The counted records path returns [] because count=0,
-    # but the fallback path needs len(body) >= full_sym_size.
-    # body = count(4) + record(record_size) => 4 + record_size >= record_size => True
+async def test_get_full_symbol_info_rejects_unexpected_record_after_zero_count():
+    """Do not parse a zero-count response as an uncounted record."""
+    client = _full_symbol_client()
+    body = struct.pack("<I", 0) + _full_symbol_body()[4:]
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=body),
     )
-    result = await client.get_full_symbol_info("EURUSD")
-    # Should work via fallback parse (body[0:] starts with the 4-byte count,
-    # but the fallback skips the count prefix and tries parsing from offset 0)
-    # The fallback path checks len(result.body) >= full_sym_size
-    # body length = 4 + record_size >= record_size, so it enters the fallback
-    assert result is not None
+    with pytest.raises(ProtocolError, match="invalid full symbol response"):
+        await client.get_full_symbol_info("EURUSD")
 
 
 async def test_get_full_symbol_info_fallback_too_short():
-    """get_full_symbol_info returns None when fallback body is too short (line 195)."""
-    client = MT5WebClient()
+    """Trailing bytes after a zero count are invalid."""
+    client = _full_symbol_client()
     # Body with count=0 and not enough data for a full record
     body = struct.pack("<I", 0) + b"\x00" * 10
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=body),
     )
-    result = await client.get_full_symbol_info("EURUSD")
-    assert result is None
+    with pytest.raises(ProtocolError, match="invalid full symbol response"):
+        await client.get_full_symbol_info("EURUSD")
 
 
 async def test_get_full_symbol_info_exception_handling():
-    """get_full_symbol_info catches struct/parse errors (lines 196-198)."""
-    client = MT5WebClient()
+    """A truncated full symbol response is an explicit protocol error."""
+    client = _full_symbol_client()
     # Body with count=1 but truncated record data => will trigger struct.error
     body = struct.pack("<I", 1) + b"\x01\x02\x03"
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=body),
     )
-    result = await client.get_full_symbol_info("EURUSD")
-    assert result is None
+    with pytest.raises(ProtocolError, match="invalid full symbol response"):
+        await client.get_full_symbol_info("EURUSD")
 
 
 # ===========================================================================
@@ -571,9 +574,8 @@ async def test_symbol_info_from_full_cache():
 
 async def test_symbol_info_from_get_full():
     """symbol_info fetches full symbol info when not cached (lines 205-207)."""
-    client = MT5WebClient()
-    record_size = get_series_size(FULL_SYMBOL_SCHEMA)
-    body = struct.pack("<I", 1) + b"\x00" * record_size
+    client = _full_symbol_client()
+    body = _full_symbol_body()
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=body),
     )
@@ -584,7 +586,7 @@ async def test_symbol_info_from_get_full():
 async def test_symbol_info_fallback_to_basic():
     """symbol_info falls back to basic symbol info (lines 208-222)."""
     client = MT5WebClient()
-    # get_full_symbol_info returns None (empty body)
+    # get_full_symbol_info returns None for a zero-count response.
     # load_symbols populates the basic cache
     sym = SymbolInfo(
         name="EURUSD",
@@ -601,7 +603,7 @@ async def test_symbol_info_fallback_to_basic():
 
     # get_full_symbol_info will return None
     client.transport.send_command = AsyncMock(
-        return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=b""),
+        return_value=CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=struct.pack("<I", 0)),
     )
     result = await client.symbol_info("EURUSD")
     assert result is not None
@@ -628,7 +630,7 @@ async def test_symbol_info_not_found():
         nonlocal call_count
         call_count += 1
         if cmd == CMD_GET_FULL_SYMBOLS:
-            return CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=b"")
+            return CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=struct.pack("<I", 0))
         return CommandResult(command=CMD_GET_SYMBOLS_GZIP, code=0, body=symbols_body)
 
     client.transport.send_command = AsyncMock(side_effect=side_effect)
@@ -655,7 +657,7 @@ async def test_symbol_info_triggers_load_symbols():
 
     async def side_effect(cmd, payload=None):
         if cmd == CMD_GET_FULL_SYMBOLS:
-            return CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=b"")
+            return CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=struct.pack("<I", 0))
         return CommandResult(command=CMD_GET_SYMBOLS_GZIP, code=0, body=symbols_body)
 
     client.transport.send_command = AsyncMock(side_effect=side_effect)

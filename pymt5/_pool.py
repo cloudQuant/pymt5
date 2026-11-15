@@ -41,6 +41,15 @@ class MT5ConnectionPool:
         accounts: list[PoolAccount | dict[str, Any]],
         **client_kwargs: Any,
     ) -> None:
+        """Configure a pool without opening any connections.
+
+        Args:
+            accounts: Account definitions used to create clients. Dictionary
+                entries must contain fields accepted by :class:`PoolAccount`.
+            **client_kwargs: Additional keyword arguments forwarded to every
+                :class:`MT5WebClient` constructor.
+
+        """
         self._accounts: list[PoolAccount] = []
         for acct in accounts:
             if isinstance(acct, dict):
@@ -58,7 +67,22 @@ class MT5ConnectionPool:
         await self.close_all()
 
     async def connect_all(self) -> None:
-        """Connect and log in to all configured accounts concurrently."""
+        """Connect and log in to all configured accounts concurrently.
+
+        Raises:
+            ValueError: If more than one configured account uses the same login.
+
+        """
+        seen: set[int] = set()
+        duplicates: set[int] = set()
+        for acct in self._accounts:
+            if acct.login in seen:
+                duplicates.add(acct.login)
+            seen.add(acct.login)
+        if duplicates:
+            login_list = ", ".join(str(login) for login in sorted(duplicates))
+            raise ValueError(f"Duplicate login key(s) configured for pool accounts: {login_list}")
+
         tasks = [self._connect_one(acct) for acct in self._accounts]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for acct, result in zip(self._accounts, results):
@@ -67,10 +91,26 @@ class MT5ConnectionPool:
                 logger.error("failed to connect account %s: %s", label, result)
 
     async def _connect_one(self, acct: PoolAccount) -> None:
-        """Connect and log in a single account."""
+        """Connect and log in a single account without replacing an existing client."""
+        if acct.login in self._clients:
+            raise ValueError(f"Login key {acct.login} is already connected; refusing to overwrite its client")
+
         client = MT5WebClient(uri=acct.server, **self._client_kwargs)
-        await client.connect()
-        await client.login(login=acct.login, password=acct.password)
+        try:
+            await client.connect()
+            await client.login(login=acct.login, password=acct.password)
+            # A concurrent _connect_one call may have installed this login while
+            # this client was connecting. Never overwrite that existing client.
+            if acct.login in self._clients:
+                raise ValueError(f"Login key {acct.login} is already connected; refusing to overwrite its client")
+        except BaseException:
+            try:
+                await client.close()
+            except BaseException as cleanup_error:
+                # Cleanup failures must not hide connect/login errors or cancellation.
+                logger.error("pool: error closing login=%d after connection failure: %s", acct.login, cleanup_error)
+            raise
+
         self._clients[acct.login] = client
         label = acct.label or str(acct.login)
         logger.info("pool: connected account %s", label)

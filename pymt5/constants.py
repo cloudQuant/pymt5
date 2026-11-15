@@ -1,9 +1,21 @@
+"""Protocol, market-data, and trading constants used by the MT5 client.
+
+The values cover outer-frame framing, command identifiers, schema field type
+tags, chart periods, tick flags, order and deal semantics, trade return codes,
+and calculation-mode groups. Multi-byte protocol values are interpreted as
+little-endian by the framing and serialization code unless stated otherwise.
+"""
+
 HEADER_BYTE_LENGTH = 8
 OUTER_PROTOCOL_VERSION = 1
 DEFAULT_WS_URI = "wss://web.metatrader.app/terminal"
 INITIAL_KEY_OBFUSCATED = "13ef13b2b76dd8:5795gdcfb2fdc1ge85bf768f54773d22fff996e3ge75g5:75"
 DEFAULT_TOKEN_LENGTH = 64
 DEFAULT_COMMAND_TIMEOUT = 30.0
+MT5_TERMINAL_VERSION = 500
+OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES = {
+    5687: "15 Mar 2026",
+}
 
 CMD_BOOTSTRAP = 0
 CMD_LOGOUT = 2

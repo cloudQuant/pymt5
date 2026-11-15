@@ -1,6 +1,29 @@
 Changelog
 =========
 
+v1.1.0 (2026-11-14)
+-------------------
+
+- Serialize requests sharing a command ID and isolate a connection after a
+  timeout, cancellation, or send failure when sending may have begun. Late
+  responses cannot complete later requests on that connection; the server-side
+  result of an interrupted trade remains unknown and requires reconciliation.
+- Harden reconnect, close, disconnect-callback, and subscription-restoration
+  lifecycle handling, with expanded offline regression coverage for connection
+  generations and disconnect races.
+- Validate tick subscribe/unsubscribe response codes and retain the last
+  confirmed local subscription set after rejection. A server can still reject
+  removal of the final tick subscription; cleanup rejection is not success.
+- Extend observed build 6320 login and symbol-detail compatibility while keeping
+  tick-price and historical-rate compatibility controls explicit. Observations
+  from one server build do not certify another broker or build.
+- Add complete English and Simplified Chinese documentation, environment-based
+  example credentials, and task-oriented safety, reliability, and troubleshooting
+  guides.
+- Verify release tags against bilingual changelogs and source version fallbacks.
+  Publish the same wheel/sdist artifacts that passed metadata and clean-wheel
+  installation checks, and attach them to the GitHub Release.
+
 v1.0.4 (2026-11-13)
 -------------------
 

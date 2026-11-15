@@ -4,6 +4,7 @@ connection pool, and dev-mode schema validation.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -58,6 +59,9 @@ class _MockWS:
 
     async def __anext__(self):
         if self._index >= len(self._messages):
+            # The bootstrap succeeded and this test models an open session;
+            # EOF is covered separately by the disconnect lifecycle tests.
+            await asyncio.Event().wait()
             raise StopAsyncIteration
         msg = self._messages[self._index]
         self._index += 1
@@ -215,7 +219,8 @@ class TestOrderManager:
     def test_init_empty(self):
         mgr = OrderManager()
         assert mgr.get_orders() == []
-        assert mgr.get_positions() == []
+        with pytest.warns(DeprecationWarning, match="never populated"):
+            assert mgr.get_positions() == []
 
     def test_track_order(self):
         mgr = OrderManager()
@@ -387,17 +392,20 @@ class TestOrderManager:
 
     def test_get_position_not_found(self):
         mgr = OrderManager()
-        assert mgr.get_position("EURUSD") is None
+        with pytest.warns(DeprecationWarning, match="never populated"):
+            assert mgr.get_position("EURUSD") is None
 
     def test_clear(self):
         mgr = OrderManager()
         mgr.track_order(1, "EURUSD", 0, 0.01, 1.12)
         mgr._positions["EURUSD"] = PositionSummary("EURUSD", 0.01, 1.12)
         assert len(mgr.get_orders()) == 1
-        assert len(mgr.get_positions()) == 1
+        with pytest.warns(DeprecationWarning, match="never populated"):
+            assert len(mgr.get_positions()) == 1
         mgr.clear()
         assert mgr.get_orders() == []
-        assert mgr.get_positions() == []
+        with pytest.warns(DeprecationWarning, match="never populated"):
+            assert mgr.get_positions() == []
 
     def test_track_order_with_raw(self):
         mgr = OrderManager()

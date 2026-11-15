@@ -1,3 +1,13 @@
+"""Binary framing and schema-driven codecs for the MT5 Web Terminal protocol.
+
+Outer frames start with an eight-byte little-endian header containing a
+32-bit body length and a 32-bit protocol version. Command bodies contain a
+two-byte random prefix, a little-endian 16-bit command identifier, and an
+optional payload. Response payloads additionally include a one-byte status
+code. :class:`SeriesCodec` serializes fixed-layout field sequences without
+embedding field names or types in the wire data.
+"""
+
 import logging
 import os
 import struct
@@ -43,6 +53,15 @@ _TS_MAX_MS = 4_102_444_800_000  # year 2100
 
 @dataclass(slots=True)
 class ResponseFrame:
+    """Decoded command-response metadata and its unparsed payload.
+
+    Attributes:
+        command: Little-endian 16-bit command identifier read at byte offset 2.
+        code: One-byte response status read at byte offset 4.
+        body: Bytes following the five-byte response prefix.
+
+    """
+
     command: int
     code: int
     body: bytes
@@ -63,10 +82,36 @@ def _filetime_to_unix_ms(buffer: bytes) -> int:
 
 
 def pack_outer(body: bytes) -> bytes:
+    """Prepend the standard eight-byte outer-protocol header to a body.
+
+    Args:
+        body: Unframed command or response bytes.
+
+    Returns:
+        The body length and protocol version packed as two little-endian
+        unsigned 32-bit integers, followed by ``body``.
+
+    """
     return struct.pack("<II", len(body), OUTER_PROTOCOL_VERSION) + body
 
 
 def unpack_outer(frame: bytes) -> tuple[int, int, bytes]:
+    """Validate and split a complete outer-protocol frame.
+
+    The version is returned but not checked against
+    ``OUTER_PROTOCOL_VERSION``.
+
+    Args:
+        frame: Complete frame, including its eight-byte header.
+
+    Returns:
+        A tuple of ``(declared_body_length, protocol_version, body)``.
+
+    Raises:
+        ProtocolError: If the header is incomplete or its declared body length
+            differs from the number of bytes after the header.
+
+    """
     if len(frame) < HEADER_BYTE_LENGTH:
         raise ProtocolError("frame too short")
     body_len, version = struct.unpack_from("<II", frame, 0)
@@ -77,11 +122,36 @@ def unpack_outer(frame: bytes) -> tuple[int, int, bytes]:
 
 
 def build_command(command: int, payload: bytes | None = None) -> bytes:
+    """Build an unframed command body with a fresh random prefix.
+
+    Args:
+        command: Unsigned 16-bit command identifier, encoded little-endian.
+        payload: Serialized command fields. ``None`` means an empty payload.
+
+    Returns:
+        Two random prefix bytes, the two-byte command identifier, and the
+        payload concatenated in that order.
+
+    """
     body = payload or b""
     return random_command_prefix() + struct.pack("<H", command) + body
 
 
 def parse_response_frame(data: bytes) -> ResponseFrame:
+    """Parse the fixed five-byte prefix of an unframed response body.
+
+    Args:
+        data: Response bytes beginning with a two-byte prefix, a little-endian
+            16-bit command identifier, and a one-byte status code.
+
+    Returns:
+        A :class:`ResponseFrame` containing the command, status, and remaining
+        bytes. The returned body is not otherwise interpreted.
+
+    Raises:
+        ProtocolError: If fewer than five bytes are available.
+
+    """
     if len(data) < 5:
         raise ProtocolError("response frame too short")
     command = struct.unpack_from("<H", data, 2)[0]
@@ -165,6 +235,27 @@ _EIGHT_BYTE_TYPES = frozenset({PROP_F64, PROP_TIME, PROP_I64, PROP_U64})
 
 
 def get_series_size(schema: Iterable[Sequence[object] | Mapping[str, object]]) -> int:
+    """Calculate the number of wire bytes occupied by a field schema.
+
+    Fixed-width numeric fields contribute their native encoded size. Time and
+    64-bit integer fields contribute eight bytes. String and byte fields use
+    their declared ``propLength``; no length prefix or field metadata is added.
+
+    Args:
+        schema: Ordered field specifications. A specification may be a mapping
+            with ``propType`` and optional ``propLength`` keys, or a sequence
+            whose items at indexes 0 and 2 provide those values.
+
+    Returns:
+        Total encoded size in bytes.
+
+    Raises:
+        ProtocolError: If a type or length tag is not an integer, or a
+            variable-width field lacks ``propLength``.
+        NotImplementedError: If the schema contains an unsupported property
+            type.
+
+    """
     size = 0
     for field in schema:
         prop_type = _field_type(field)
@@ -184,8 +275,40 @@ def get_series_size(schema: Iterable[Sequence[object] | Mapping[str, object]]) -
 
 
 class SeriesCodec:
+    """Serialize and parse ordered fields according to an external schema.
+
+    Sequence specifications use ``(propType, propValue, propLength)`` for
+    serialization and ``(propType, ..., propLength)`` for parsing. Mapping
+    specifications use the keys ``propType``, ``propValue``, and
+    ``propLength``. Numeric values are little-endian; ``PROP_TIME`` converts
+    between Unix milliseconds and an eight-byte Windows FILETIME count of
+    100-nanosecond ticks since 1601-01-01 UTC. Fixed strings are UTF-16LE,
+    while ``PROP_STRING`` uses fixed-width Latin-1 and ``PROP_BYTES`` contains
+    raw bytes.
+    """
+
     @staticmethod
     def serialize(fields: Sequence[Sequence[object] | Mapping[str, object]]) -> bytes:
+        """Encode field values consecutively without per-field metadata.
+
+        Integer fields are coerced to ``int`` and floating-point fields to
+        ``float``. ``PROP_TIME`` treats its value as Unix milliseconds. A
+        ``PROP_BYTES`` field without ``propLength`` emits its raw bytes;
+        fixed-string and ``PROP_STRING`` fields require a declared length.
+
+        Args:
+            fields: Ordered schema entries containing the property type, value,
+                and, for fixed-width variable data, its byte length.
+
+        Returns:
+            The concatenated little-endian field representation.
+
+        Raises:
+            ProtocolError: If a required ``propLength`` is missing or a type or
+                length tag is invalid.
+            NotImplementedError: If a property type is unsupported.
+
+        """
         chunks: list[bytes] = []
         for field in fields:
             prop_type = _field_type(field)
@@ -229,6 +352,28 @@ class SeriesCodec:
         schema: Sequence[Sequence[object] | Mapping[str, object]],
         offset: int = 0,
     ) -> list[Any]:
+        """Decode one schema-defined record from a byte buffer.
+
+        Only the bytes required by ``schema`` are consumed; trailing bytes are
+        left unexamined. ``PROP_TIME`` values are returned as Unix milliseconds,
+        fixed strings as text, and byte fields as raw ``bytes``.
+
+        Args:
+            buffer: Source bytes containing the encoded record.
+            schema: Ordered field specifications. Their value entries, if any,
+                are ignored during parsing.
+            offset: Zero-based byte position at which the record starts.
+
+        Returns:
+            Decoded values in schema order.
+
+        Raises:
+            ProtocolError: If the buffer does not contain the complete record,
+                a required field length is missing, or a type or length tag is
+                invalid.
+            NotImplementedError: If a property type is unsupported.
+
+        """
         required = get_series_size(schema)
         available = len(buffer) - offset
         if available < required:
@@ -306,4 +451,21 @@ class SeriesCodec:
         schema: Sequence[Sequence[object] | Mapping[str, object]],
         offset: int = 0,
     ) -> list[Any]:
+        """Decode a record at an explicit offset.
+
+        This is a compatibility alias for :meth:`SeriesCodec.parse`.
+
+        Args:
+            buffer: Source bytes containing the encoded record.
+            schema: Ordered field specifications.
+            offset: Zero-based byte position at which the record starts.
+
+        Returns:
+            Decoded values in schema order.
+
+        Raises:
+            ProtocolError: If the record is incomplete or its schema is invalid.
+            NotImplementedError: If a property type is unsupported.
+
+        """
         return SeriesCodec.parse(buffer, schema, offset)

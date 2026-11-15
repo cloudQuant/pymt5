@@ -1,0 +1,20 @@
+{% macro language_switch() %}
+{% set _root = pathto('', 1) %}
+{% set _site_root = '' if _root == '#' else _root %}
+{% set _is_chinese = docs_language == 'zh_CN' %}
+{% set _other_language = 'en' if _is_chinese else ('zh-cn' if pymt5_on_readthedocs else 'zh-CN') %}
+{% if pymt5_on_readthedocs %}
+{% set _other_root = _site_root ~ '../../' ~ _other_language ~ '/' ~ pymt5_rtd_switch_version ~ '/' %}
+{% else %}
+{% set _other_root = _site_root ~ '../' ~ _other_language ~ '/' %}
+{% endif %}
+<nav class="pymt5-language-switch" aria-label="{{ '语言 / Language' if _is_chinese else 'Language / 语言' }}">
+  {% if _is_chinese %}
+  <a href="{{ _other_root }}{{ pagename }}.html" hreflang="en" lang="en" data-language-switch="en">English</a>
+  <span aria-current="page" lang="zh-CN">中文</span>
+  {% else %}
+  <span aria-current="page" lang="en">English</span>
+  <a href="{{ _other_root }}{{ pagename }}.html" hreflang="zh-CN" lang="zh-CN" data-language-switch="{{ _other_language }}">中文</a>
+  {% endif %}
+</nav>
+{% endmacro %}

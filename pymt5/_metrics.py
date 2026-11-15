@@ -15,25 +15,25 @@ class MetricsCollector(Protocol):
     """Protocol for collecting pymt5 operational metrics."""
 
     def on_command_sent(self, command: int) -> None:
-        """Called after a command is sent to the server."""
+        """Record that a command was sent to the server."""
         ...
 
     def on_command_received(self, command: int, code: int) -> None:
-        """Called when a response is received for a command."""
+        """Record a response received for a command."""
         ...
 
     def on_connect(self) -> None:
-        """Called when the transport connects successfully."""
+        """Record a successful transport connection."""
         ...
 
     def on_disconnect(self, reason: str) -> None:
-        """Called when the transport disconnects."""
+        """Record a transport disconnection and its reason."""
         ...
 
     def on_reconnect_attempt(self, attempt: int) -> None:
-        """Called when a reconnection attempt begins."""
+        """Record the start of a reconnection attempt."""
         ...
 
     def on_reconnect_success(self, attempt: int) -> None:
-        """Called when reconnection succeeds."""
+        """Record a successful reconnection attempt."""
         ...

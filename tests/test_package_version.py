@@ -24,6 +24,6 @@ def test_version_falls_back_when_distribution_not_installed():
     try:
         with patch("importlib.metadata.version", side_effect=importlib.metadata.PackageNotFoundError):
             importlib.reload(pymt5)
-            assert pymt5.__version__ == "1.0.4"
+            assert pymt5.__version__ == "1.1.0"
     finally:
         importlib.reload(pymt5)

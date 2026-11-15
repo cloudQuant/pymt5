@@ -19,6 +19,14 @@ class TokenBucketRateLimiter:
     """
 
     def __init__(self, rate: float = 10.0, burst: int = 20) -> None:
+        """Initialize a token bucket at full capacity.
+
+        Args:
+            rate: Number of tokens replenished per second. Values less than or
+                equal to zero disable rate limiting.
+            burst: Maximum number of accumulated tokens and initial bucket capacity.
+
+        """
         self.rate = rate
         self.burst = burst
         self._tokens = float(burst)

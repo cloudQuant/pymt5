@@ -26,6 +26,8 @@ from pymt5.constants import (
     CMD_OTP_SETUP,
     CMD_SEND_VERIFY_CODES,
     CMD_VERIFY_CODE,
+    MT5_TERMINAL_VERSION,
+    OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES,
     PROP_BYTES,
     PROP_F64,
     PROP_FIXED_STRING,
@@ -59,11 +61,6 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 logger = get_logger("pymt5.client")
-
-MT5_TERMINAL_VERSION = 500
-OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES = {
-    5687: "15 Mar 2026",
-}
 
 
 class _AccountMixin:
@@ -202,6 +199,18 @@ class _AccountMixin:
         )
 
     async def change_password(self, new_password: str, old_password: str, is_investor: bool = False) -> int:
+        """Request a trader or investor password change.
+
+        Args:
+            new_password: New password, truncated to 32 characters for the wire format.
+            old_password: Current password, truncated to 32 characters for the wire format.
+            is_investor: Whether to change the investor password instead of the trader password.
+
+        Returns:
+            The signed response code returned by the server. A nonzero value
+            indicates that the server rejected the request.
+
+        """
         payload = SeriesCodec.serialize(
             [
                 (4, int(is_investor)),
@@ -213,6 +222,13 @@ class _AccountMixin:
         return int.from_bytes(result.body[:4], "little", signed=True)
 
     async def trader_params(self) -> tuple[str, str]:
+        """Fetch the two server-defined trader parameter strings.
+
+        Returns:
+            The pair of fixed-size strings decoded from the trader-parameters
+            response. Their interpretation depends on the server build.
+
+        """
         from pymt5.constants import CMD_TRADER_PARAMS
         from pymt5.types import TRADER_PARAMS_SCHEMA
 
@@ -232,6 +248,7 @@ class _AccountMixin:
 
         Returns:
             Raw CommandResult with server response (account details).
+
         """
         payload = self._build_init_payload(
             version=version,
@@ -279,6 +296,7 @@ class _AccountMixin:
 
         Returns:
             Raw CommandResult with server response.
+
         """
         payload = SeriesCodec.serialize(
             [
@@ -374,6 +392,7 @@ class _AccountMixin:
 
         Returns:
             Raw CommandResult with server acknowledgement.
+
         """
         payload = SeriesCodec.serialize(
             [

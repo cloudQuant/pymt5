@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pymt5.constants import (
     PROP_BYTES,
@@ -19,6 +19,7 @@ from pymt5.constants import (
 # Type aliases
 Record = dict[str, Any]
 RecordList = list[Record]
+TickPriceMode = Literal["auto", "scaled", "normalized"]
 
 
 @dataclass
@@ -38,6 +39,7 @@ class TradeResult:
     request_id: int = 0
 
     def __repr__(self) -> str:
+        """Return a compact representation with nonzero trade identifiers."""
         parts = [f"retcode={self.retcode}", f"success={self.success}", f"desc='{self.description}'"]
         if self.deal:
             parts.append(f"deal={self.deal}")
@@ -88,6 +90,7 @@ class VerificationStatus:
     phone: bool = False
 
     def __bool__(self) -> bool:
+        """Return whether either email or phone verification is complete."""
         return self.email or self.phone
 
 
@@ -102,6 +105,7 @@ class OpenAccountResult:
 
     @property
     def success(self) -> bool:
+        """Whether the account-opening response has a zero success code."""
         return self.code == 0
 
 

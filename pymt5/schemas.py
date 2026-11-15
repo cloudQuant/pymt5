@@ -1,9 +1,9 @@
-"""
-Protocol schemas extracted from the MT5 Web Terminal JavaScript source.
+"""Protocol schemas extracted from the MT5 Web Terminal JavaScript source.
 
-Each schema is a list of dicts with keys:
-  - propType: int  (matches PROP_* constants)
-  - propLength: int (optional, for fixed-size fields)
+Each schema is a list of dictionaries with these keys:
+
+- ``propType``: integer matching a ``PROP_*`` constant.
+- ``propLength``: optional fixed field size in bytes.
 """
 
 from pymt5.constants import (
@@ -639,6 +639,37 @@ SYMBOL_DETAILS_FIELD_NAMES = [
     "flags",
 ]
 
+# Observed cmd=17 layout in Web Terminal build 6320. The legacy layout above
+# remains in use for other/unknown builds; meanings not established for this
+# build are deliberately exposed only as their wire-field indices.
+SYMBOL_DETAILS_6320_SCHEMA = [
+    {"propType": PROP_U32},  # 0: symbol_id
+    {"propType": PROP_I64},  # 1: fields_mask
+    {"propType": PROP_I32},  # 2: tick_time
+    {"propType": PROP_U32},  # 3: unknown
+    *[{"propType": PROP_F64} for _ in range(9)],  # 4-12: quote prices
+    *[{"propType": PROP_I64} for _ in range(3)],  # 13: tick_volume; 14-15: unknown
+    {"propType": PROP_U32},  # 16: unknown
+    {"propType": PROP_U64},  # 17: unknown
+    *[{"propType": PROP_U32} for _ in range(3)],  # 18-20: unknown
+    {"propType": PROP_I64},  # 21: unknown
+    {"propType": PROP_U32},  # 22: unknown
+    {"propType": PROP_I64},  # 23: unknown
+    *[{"propType": PROP_F64} for _ in range(6)],  # 24-25: open/close; 26-29: unknown
+    *[{"propType": PROP_I64} for _ in range(8)],  # 30-37: unknown
+    {"propType": PROP_U16},  # 38: flags
+]
+
+SYMBOL_DETAILS_6320_FIELD_NAMES = [
+    "symbol_id", "fields_mask", "tick_time", "wire_field_3",
+    "bid", "bid_high", "bid_low", "ask", "ask_high", "ask_low", "last", "last_high", "last_low",
+    "tick_volume", "wire_field_14", "wire_field_15", "wire_field_16", "wire_field_17", "wire_field_18",
+    "wire_field_19", "wire_field_20", "wire_field_21", "wire_field_22", "wire_field_23", "price_open",
+    "price_close", "wire_field_26", "wire_field_27", "wire_field_28", "wire_field_29", "wire_field_30",
+    "wire_field_31", "wire_field_32", "wire_field_33", "wire_field_34", "wire_field_35", "wire_field_36",
+    "wire_field_37", "flags",
+]
+
 # ---------------------------------------------------------------------------
 # Trade Result Push (cmd 19)
 # Schema $p/Ap in JS — async trade execution result
@@ -1042,6 +1073,7 @@ _SCHEMA_PAIRS = [
     (TRADE_TRANSACTION_SCHEMA, TRADE_TRANSACTION_FIELD_NAMES, "TRADE_TRANSACTION"),
     (TRADE_UPDATE_BALANCE_SCHEMA, TRADE_UPDATE_BALANCE_FIELD_NAMES, "TRADE_UPDATE_BALANCE"),
     (SYMBOL_DETAILS_SCHEMA, SYMBOL_DETAILS_FIELD_NAMES, "SYMBOL_DETAILS"),
+    (SYMBOL_DETAILS_6320_SCHEMA, SYMBOL_DETAILS_6320_FIELD_NAMES, "SYMBOL_DETAILS_6320"),
     (TRADE_RESULT_PUSH_SCHEMA, TRADE_RESULT_PUSH_FIELD_NAMES, "TRADE_RESULT_PUSH"),
     (TRADE_RESULT_RESPONSE_SCHEMA, TRADE_RESULT_RESPONSE_FIELD_NAMES, "TRADE_RESULT_RESPONSE"),
     (CORPORATE_LINK_SCHEMA, CORPORATE_LINK_FIELD_NAMES, "CORPORATE_LINK"),

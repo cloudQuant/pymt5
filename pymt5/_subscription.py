@@ -6,6 +6,7 @@ automatically unsubscribes when exiting the ``async with`` block.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
@@ -35,9 +36,19 @@ class SubscriptionHandle:
         ids: list[int],
         unsubscribe_fn: Callable[[list[int]], Coroutine[Any, Any, None]],
     ) -> None:
+        """Initialize an active subscription handle.
+
+        Args:
+            ids: Symbol identifiers covered by the subscription. The list is
+                copied so later caller mutations do not change the handle.
+            unsubscribe_fn: Coroutine function called with the stored IDs when
+                the subscription is closed.
+
+        """
         self._ids = list(ids)
         self._unsubscribe_fn = unsubscribe_fn
         self._active = True
+        self._lock = asyncio.Lock()
 
     @property
     def ids(self) -> list[int]:
@@ -51,9 +62,10 @@ class SubscriptionHandle:
 
     async def unsubscribe(self) -> None:
         """Explicitly unsubscribe. Idempotent."""
-        if self._active:
-            self._active = False
-            await self._unsubscribe_fn(self._ids)
+        async with self._lock:
+            if self._active:
+                await self._unsubscribe_fn(self._ids)
+                self._active = False
 
     async def __aenter__(self) -> SubscriptionHandle:
         return self

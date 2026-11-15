@@ -1,445 +1,189 @@
 # pymt5
 
+**English** | [**简体中文**](README.zh-CN.md)
+
 [![CI](https://github.com/cloudQuant/pymt5/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudQuant/pymt5/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/mt5-web-client)](https://pypi.org/project/mt5-web-client/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://cloudquant.github.io/pymt5/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/cloudQuant/pymt5)
+[![Documentation](https://img.shields.io/badge/docs-English%20%7C%20%E4%B8%AD%E6%96%87-blue)](https://cloudquant.github.io/pymt5/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary protocol.
+**Async Python client for MetaTrader 5 Web Terminal**, using a reverse-engineered,
+encrypted WebSocket binary protocol.
 
-See the [changelog](docs/changelog.rst) for releases and subsequent changes.
+[English documentation](https://cloudquant.github.io/pymt5/en/) ·
+[中文文档](https://cloudquant.github.io/pymt5/zh-CN/) ·
+[Examples](https://cloudquant.github.io/pymt5/en/examples.html) ·
+[Issues](https://github.com/cloudQuant/pymt5/issues)
 
-## What's new in 1.0.4
-
-- Trade requests retain the legacy wire format by default. An explicit
-  `build_6090` profile adds the reported reserved bytes and market-deal action.
-- Ambiguous or mismatched historical rate response lengths raise `ProtocolError`;
-  choose `standard` or `extended` explicitly when the server's format is known.
-- Login rejects nonzero server response codes, and logout clears stored reconnect
-  credentials after success. Switching accounts requires an explicit logout.
-- `close_position()` rejects invalid IDs and refuses automatic direction detection
-  when the position or its matching symbol cannot be verified.
-
-These changes have offline test coverage. The new build 6090 profile has not been
-independently verified against a broker in this release.
-
-## Requirements
-
-- **Python 3.11+** (3.11, 3.12, 3.13)
-- **Platforms**: Linux, macOS, Windows
-- **Dependencies**: `websockets`, `cryptography`
+> **Unofficial and experimental:** pymt5 is not affiliated with or endorsed by
+> MetaQuotes. Protocol behavior can change across brokers and server builds.
+> Start with an authorized demo account and read the
+> [security guide](https://cloudquant.github.io/pymt5/en/security.html) before
+> connecting an application.
 
 ## Features
 
-### Core Protocol
-- WebSocket transport to `wss://web.metatrader.app/terminal`
-- AES-CBC encryption with zero IV and PKCS7 padding
-- Bootstrap handshake (cmd=0) with automatic key exchange
-- Login (cmd=28) with UTF-16LE encoded fields
-- `ping`, `logout`, `change_password`, `trader_params`
-- `verify_code` (cmd=27) — two-factor authentication
-- `request_opening_verification` / `submit_opening_verification` (cmd=27/40)
-- `open_demo_account` (cmd=30) and `open_real_account` (cmd=39)
-- `enable_otp` / `disable_otp` (cmd=43)
-- `open_demo` (cmd=30) — legacy init-style wrapper kept for compatibility
-- `send_notification` (cmd=42) — server notifications
+| Area | Capabilities |
+| --- | --- |
+| Session | Async context manager, bootstrap key exchange, login/logout, heartbeat, optional automatic reconnect |
+| Account | Account state, positions, pending orders, deals, and trade history |
+| Market data | Symbol metadata, historical bars, real-time ticks, and order book |
+| Streaming | Raw and typed callbacks, tick/book caches, disconnect notifications |
+| Trading | Market/pending order helpers, position modification/close, raw `trade_request()` |
+| Compatibility | Selected MetaTrader5-style helpers, explicit tick/bar/trade wire-format controls |
+| Operations | Exception hierarchy, logging, optional metrics, and command rate limiting |
 
-### Account Data
-- **`get_account` (cmd=3)** — account metadata and balance state: balance, credit, currency, leverage, account/server/company names, timezone, rights flags, trade settings, leverage rules, commission tables
-- `get_account_summary()` — `AccountInfo` dataclass (uses cmd=3 + positions)
-- `get_positions_and_orders` (cmd=4) — open positions and pending orders
-- `get_positions()` — convenience: open positions only
-- `get_orders()` — convenience: pending orders only
-- `get_trade_history` (cmd=5) — closed deals and historical orders
-- `get_deals()` — convenience: closed deals only
+The package name is **`mt5-web-client`**; the import name is **`pymt5`**.
+Python **3.11+** is supported on Linux, macOS, and Windows. No local MetaTrader
+terminal is required.
 
-### Market Data
-- `get_symbols` (cmd=34, zlib compressed) — full symbol list with metadata
-- **`get_symbol_groups` (cmd=9)** — category tree (Forex, Crypto, Indexes, etc.)
-- `get_full_symbol_info` (cmd=18) — detailed contract specs (tick size, margins, volumes, bond face value/accrued interest, trade schedule, subscription flags)
-- **`get_spreads` (cmd=20)** — spread data with proper schema parsing
-- `get_rates` (cmd=11) — historical OHLCV bars (M1 to MN1), with standard and extended formats
-- `subscribe_ticks` (cmd=7) — real-time tick push (cmd=8) with callback
-- `subscribe_symbols` — name-based tick subscription (resolves names via symbol cache)
-- **`subscribe_book` (cmd=22)** — order book / depth-of-market subscription
-- **`subscribe_book_by_name`** — name-based order book subscription
-
-By default, rate responses are decoded automatically only when their length uniquely
-identifies the 48-byte standard or 56-byte extended format. Lengths divisible by both,
-including any nonzero multiple of 336 bytes, or by neither, raise `ProtocolError` rather
-than guessing. This is a behavior
-change for ambiguous or mismatched responses. Select the format confirmed for your
-server with `MT5WebClient(rate_bar_format="standard")` or `"extended"`; alternatively,
-pass `bar_format="standard"` or `"extended"` to `get_rates()` or the `copy_rates_*()`
-wrappers. The extended format includes `real_volume`. `get_rates_raw()` can help inspect
-an unknown response, but length alone does not identify an ambiguous format. Both
-`get_rates()` and `get_rates_raw()` raise `ProtocolError` for nonzero server response codes.
-Length validation cannot detect truncation or an incorrect format selection when the
-resulting size happens to match the selected record size.
-
-### Official MetaTrader5-style Helpers
-- Session/account: `initialize`, `shutdown`, `account_info`, `terminal_info`, `version`
-- Compatibility state: `last_error`
-- Symbols/history: `symbols_total`, `symbols_get`, `symbol_info`, `positions_total`, `positions_get`, `orders_total`, `orders_get`, `history_orders_*`, `history_deals_*`
-- Bars/trading: `copy_rates_range`, `copy_rates_from`, `copy_rates_from_pos`, `copy_ticks_from`, `copy_ticks_range`, `order_send`, `order_check`
-- Local formula helpers: `order_calc_profit`, `order_calc_margin` (best-effort for forex/CFD/futures/stock/bond modes that the current Web Terminal computes client-side)
-- DOM/cache helpers: `market_book_add`, `market_book_get`, `market_book_release`, `symbol_select`, `symbol_info_tick`
-- `terminal_info` and `version` are best-effort Web Terminal views derived from `cmd=3` plus observed public build metadata
-- `copy_ticks_*` are cached views over observed `cmd=8` pushes, and `order_check` is a local compatibility-layer pre-flight rather than a server RPC
-
-### Trading
-- **Raw**: `trade_request` — full control over all trade fields, returns `TradeResult`
-- **`TradeResult`** includes: `deal`, `order`, `volume`, `price`, `bid`, `ask`, `comment`, `request_id`
-- **High-level helpers** (auto-resolve digits from symbol cache):
-  - `buy_market` / `sell_market` — market orders with optional SL/TP
-  - `buy_limit` / `sell_limit` — limit pending orders
-  - `buy_stop` / `sell_stop` — stop pending orders
-  - `buy_stop_limit` / `sell_stop_limit` — stop-limit pending orders
-  - `close_position` — close by opposite market order (auto-detects BUY/SELL direction)
-  - `close_position_by` — close by opposite position (hedge netting)
-  - `modify_position_sltp` — modify SL/TP of open position
-  - `modify_pending_order` — modify pending order price/SL/TP
-  - `cancel_pending_order` — remove a pending order
-
-### Symbol Cache & Info
-- `load_symbols()` — fetch and cache all symbols for fast name→id/digits lookup
-- `get_symbol_info(name)` — lookup `SymbolInfo` by name
-- `get_symbol_id(name)` — lookup symbol ID by name
-- `symbol_names` — list all cached symbol names
-
-### Miscellaneous Commands
-- **`get_corporate_links` (cmd=44)** — broker links (support, education, social)
-- `send_raw_command` — send any command with raw payload
-- `send_bootstrap_command_52` — experimental wrapper for reserved bootstrap-only `cmd=52`
-
-### Push Notifications
-- `on_tick(callback)` — real-time tick pushes (cmd=8)
-- `on_position_update(callback)` — position change pushes
-- `on_order_update(callback)` — order change pushes
-- `on_trade_update(callback)` — combined position+order push in single callback
-- **`on_trade_transaction(callback)`** — order add/update/delete + balance updates (cmd=10)
-- `on_symbol_update(callback)` — symbol change pushes (cmd=13)
-- **`on_account_update(callback)`** — account balance/equity/margin pushes (cmd=14)
-- `on_login_status(callback)` — login status pushes (cmd=15)
-- **`on_symbol_details(callback)`** — extended quote data with options greeks (cmd=17)
-- **`on_trade_result(callback)`** — async trade execution results (cmd=19)
-- **`on_book_update(callback)`** — order book / DOM pushes (cmd=23)
-
-### Reliability
-- **Async context manager** (`async with MT5WebClient() as client:`)
-- **Auto heartbeat** — periodic ping after login (configurable interval)
-- **Auto reconnect** — optional reconnect on disconnect with exponential backoff
-- **Disconnect callback** — `on_disconnect()` for custom handling
-- **Python logging** — structured logging via `pymt5.client` and `pymt5.transport` loggers
-
-### Constants & Enums
-- `TradeResult` dataclass with `retcode`, `description`, `success`, `deal`, `order`, `volume`, `price` fields
-- 33 MT5 return codes with human-readable descriptions
-- Complete trade constants: `TRADE_ACTION_*` (including `CLOSE_BY`), `ORDER_TYPE_*` (including `STOP_LIMIT`), `ORDER_FILLING_*`, `ORDER_TIME_*`
-- Position/deal enums: `POSITION_TYPE_*`, `DEAL_TYPE_*` (all 15 types), `DEAL_ENTRY_*`
-- Order states: `ORDER_STATE_*` (all 7 states)
-- Symbol trade modes: `SYMBOL_TRADE_MODE_*`
-- Command IDs exported: `CMD_GET_ACCOUNT`, `CMD_GET_SYMBOL_GROUPS`, `CMD_TRADE_UPDATE_PUSH`, `CMD_ACCOUNT_UPDATE_PUSH`, `CMD_SYMBOL_DETAILS_PUSH`, `CMD_TRADE_RESULT_PUSH`, `CMD_SUBSCRIBE_BOOK`, `CMD_BOOK_PUSH`, `CMD_GET_CORPORATE_LINKS`
-
-### Tests
-- Offline unit tests cover protocol encoding, trade and rate parsing, session handling,
-  reconnect logic, compatibility helpers, and push handlers.
-
-Earlier functionality was tested against MetaQuotes-Demo on 2026-03-16 with Web Terminal
-build 5687. Those historical results do not verify the changes in 1.0.4.
-
-## Install
+## Installation
 
 ```bash
-pip install mt5-web-client
+python -m pip install mt5-web-client
 ```
 
-Or install from source:
+Optional integrations:
+
+```bash
+python -m pip install "mt5-web-client[structlog]"
+python -m pip install "mt5-web-client[pandas]"
+```
+
+For development:
 
 ```bash
 git clone https://github.com/cloudQuant/pymt5.git
 cd pymt5
-pip install -e .
+python -m pip install -e ".[dev,docs]"
 ```
 
-For development (tests + type checking):
+See the [installation guide](https://cloudquant.github.io/pymt5/en/installation.html)
+for upgrades and verification.
+
+## Quick start — read-only
+
+Set credentials through your environment or secret manager. Do not hard-code or
+commit them; pymt5 does not implicitly load `.env`.
 
 ```bash
-pip install -e ".[dev]"
-make check
+export PYMT5_SERVER="wss://web.metatrader.app/terminal"
+export PYMT5_LOGIN="your-demo-login"
+export PYMT5_PASSWORD="your-demo-password"
 ```
 
-## Quick Start
+The following example connects, loads symbols, and reads account state. It does
+**not** place, modify, or cancel an order.
 
 ```python
 import asyncio
+import os
+
 from pymt5 import MT5WebClient
 
 
-async def main():
-    async with MT5WebClient(auto_reconnect=True) as client:
-        await client.login(login=12345678, password="your-password")
+async def main() -> None:
+    client = MT5WebClient(
+        uri=os.environ["PYMT5_SERVER"],
+        auto_reconnect=True,
+    )
+    async with client:
+        await client.login(
+            login=int(os.environ["PYMT5_LOGIN"]),
+            password=os.environ["PYMT5_PASSWORD"],
+        )
 
-        # Load symbol cache
-        await client.load_symbols()
-        print(f"Loaded {len(client.symbol_names)} symbols")
+        symbols = await client.load_symbols()  # dict[str, SymbolInfo]
+        account = await client.get_account()
 
-        # Full account info (balance, equity, margin, leverage)
-        acct = await client.get_account()
-        print(f"Balance: {acct['balance']}, Currency: {acct['currency']}, Leverage: 1:{acct['leverage']}")
-
-        # Symbol groups
-        groups = await client.get_symbol_groups()
-        print(f"Groups: {groups}")
-
-        # Subscribe to ticks
-        def on_ticks(ticks):
-            for t in ticks:
-                print(f"TICK {t.get('symbol', t['symbol_id'])}: bid={t['bid']} ask={t['ask']}")
-
-        client.on_tick(on_ticks)
-        await client.subscribe_symbols(["EURUSD", "GBPUSD"])
-
-        # Register for all push notifications
-        client.on_trade_update(lambda d: print(f"Positions: {len(d['positions'])}"))
-        client.on_account_update(lambda d: print(f"Balance: {d.get('balance')}"))
-        client.on_trade_transaction(lambda d: print(f"Transaction: type={d.get('update_type')}"))
-        client.on_trade_result(lambda d: print(f"Trade result: {d.get('result', {})}"))
-
-        # Place a market buy
-        result = await client.buy_market("EURUSD", 0.01, sl=1.0800, tp=1.1200)
-        print(f"Trade: {result}")
-
-        await asyncio.sleep(10)
+        print(f"Loaded {len(symbols)} symbols")
+        print(f"Account currency: {account.get('currency', 'unknown')}")
 
 
 asyncio.run(main())
 ```
 
-Calling `login()` while already logged in raises `SessionError`; call `logout()`
-before switching accounts. A successful `logout()` clears stored reconnect
-credentials. A rejected logout raises `SessionError` and retains the current
-session state and credentials.
+Continue with the [quick start](https://cloudquant.github.io/pymt5/en/quickstart.html)
+for historical bars, managed tick subscriptions, and error handling. Runnable
+scripts are listed in the [examples guide](https://cloudquant.github.io/pymt5/en/examples.html);
+their read-only or mutating scope is labeled explicitly.
 
-## Trading Examples
+## Configuration that matters
 
-### Trade request wire format
+| Setting | Default | Why it matters |
+| --- | --- | --- |
+| `timeout=30.0` | 30 seconds | A sent request with an uncertain outcome causes connection isolation, not a presumed server result |
+| `auto_reconnect=False` | Disabled | Reconnects and logs in again after unexpected disconnects; does not retry interrupted trades |
+| `rate_bar_format="auto"` | Strict auto-detection | Ambiguous/mismatched historical response lengths raise `ProtocolError` |
+| `tick_price_mode="auto"` | Legacy heuristic | Prefer `scaled` or `normalized` after validating the target server/build |
+| `tick_price_modes={...}` | No overrides | Case-insensitive per-symbol tick price modes |
+| `trade_protocol="legacy"` | Legacy trade wire format | `build_6090` is an explicit, narrowly observed opt-in, not an automatic build selection |
+| `rate_limit=0` | Disabled | Optional token-bucket command throttling |
 
-`MT5WebClient()` uses the legacy trade request format by default. For the build 6090
-market-execution environment reported in [PR #1](https://github.com/cloudQuant/pymt5/pull/1),
-opt in explicitly:
+Full settings and environment variables are in the
+[configuration guide](https://cloudquant.github.io/pymt5/en/configuration.html).
 
-```python
-client = MT5WebClient(trade_protocol="build_6090")
-```
+## Trading and reliability — read before use
 
-This profile adds the observed reserved bytes and uses action `TRADE_ACTION_MARKET_DEAL` (3)
-for `buy_market`, `sell_market`, and `close_position`. The report covers selected symbols
-on one demo server; compatibility with other brokers, execution modes, and builds has not
-been established. The client does not select a profile from the handshake build number.
+- Use an authorized demo account first. Broker/build compatibility is not
+  established by offline tests or by a single demo observation.
+- A trade timeout or cancellation leaves server execution **unknown**. Reconcile
+  orders, deals, and positions before any retry; never assume the trade failed
+  to execute. Automatic reconnection does not retry it.
+- Same-command requests are serialized. After a timeout, cancellation, or send
+  failure where sending may have occurred, the old connection is isolated so a
+  late response cannot be assigned to a subsequent request on that connection.
+  This does not identify every unsolicited push or duplicate response.
+- Nonzero tick subscription/unsubscription responses raise `ProtocolError` and
+  preserve the last confirmed local subscription set. A build 6320 demo sample
+  rejected removal of all tick subscriptions; cleanup rejection is not success.
+- Tick `auto` price normalization remains a compatibility heuristic. Validate
+  raw and scaled values against the target server before using them in decisions.
+- Ordinary `get_positions_and_orders()` responses also invoke cmd=4 callbacks;
+  those callbacks do not distinguish query responses from unsolicited pushes.
 
-`trade_request()` and `order_send()` keep the action and fields supplied by the caller.
-For example, callers using `order_send()` for a market-execution deal with this profile
-must explicitly set `action` to `TRADE_ACTION_MARKET_DEAL`. The profile does not set
-`action_id` or `type_flags` automatically; their requirements may depend on the server.
-The PR's observed official-client requests used an `action_id` starting at 1000 and
-`type_flags=2`; whether these values are required has not been established.
-The `buy_market()`, `sell_market()`, and `close_position()` helpers accept optional
-`action_id` and `type_flags` keywords when a server requires them; both default to zero.
-Trade requests and acknowledgements do not establish that an order was filled; inspect
-subsequent trade results and positions.
-
-`close_position()` rejects non-positive position IDs. If `order_type` is omitted, it
-looks up the position and raises `ValidationError` without placing a trade if the
-position, its direction, or the position query is unavailable, or if the position's
-symbol is missing or differs from the requested symbol. Pass an explicit
-`order_type` only when the intended closing side is known.
-
-```python
-from pymt5 import (
-    MT5WebClient, ORDER_TYPE_BUY, ORDER_TYPE_SELL,
-    TRADE_RETCODE_DONE, ORDER_FILLING_IOC,
-)
-
-# Market orders
-result = await client.buy_market("XAUUSD", 0.1, sl=2300.0, tp=2400.0)
-result = await client.sell_market("EURUSD", 0.05, deviation=30)
-
-# Pending orders
-result = await client.buy_limit("EURUSD", 0.1, price=1.0800, sl=1.0750, tp=1.0900)
-result = await client.sell_stop("GBPUSD", 0.1, price=1.2500)
-
-# Stop-limit orders (trigger at price, then place limit at stop_limit_price)
-result = await client.buy_stop_limit("EURUSD", 0.1, price=1.1000,
-                                      stop_limit_price=1.0950, sl=1.0900, tp=1.1100)
-result = await client.sell_stop_limit("GBPUSD", 0.1, price=1.2400,
-                                       stop_limit_price=1.2450)
-
-# Close position (auto-detects BUY/SELL direction)
-result = await client.close_position("EURUSD", position_id=123456, volume=0.1)
-
-# Close by opposite position (hedge netting)
-result = await client.close_position_by("EURUSD", position_id=123456,
-                                         position_by=789012)
-
-# Modify SL/TP
-result = await client.modify_position_sltp("EURUSD", position_id=123456,
-                                            sl=1.0850, tp=1.0950)
-
-# Cancel pending order
-result = await client.cancel_pending_order(order=789012)
-```
-
-## Push Notifications
-
-```python
-# Combined position+order updates in one callback
-def on_trade_change(data):
-    print(f"Positions: {len(data['positions'])}, Orders: {len(data['orders'])}")
-client.on_trade_update(on_trade_change)
-
-# Trade transaction (order add/update/delete, balance updates)
-def on_transaction(data):
-    if data.get('update_type') == 2:
-        print(f"Balance update: {data['balance_info']}")
-    else:
-        print(f"Order transaction: type={data.get('transaction_type')}")
-client.on_trade_transaction(on_transaction)
-
-# Account balance/equity changes
-client.on_account_update(lambda d: print(f"Balance: {d.get('balance')}"))
-
-# Extended symbol data with options greeks
-client.on_symbol_details(lambda d: print(f"Delta: {d[0].get('delta')}"))
-
-# Async trade execution results
-client.on_trade_result(lambda d: print(f"Retcode: {d.get('result', {}).get('retcode')}"))
-
-# Order book (DOM) updates
-client.on_book_update(lambda entries: print(f"Book: {len(entries)} symbols"))
-
-# Login status changes (e.g. forced logout)
-client.on_login_status(lambda r: print(f"Login status: code={r.code}"))
-```
-
-## Protocol Flow
-
-1. `connect()` — opens WebSocket, sends bootstrap (cmd=0), receives new AES key
-2. `login()` — sends credentials (cmd=28), receives session token, starts heartbeat
-3. Data commands (get_account, get_symbols, get_rates, get_positions_and_orders, etc.)
-4. `close()` — stops heartbeat, sends logout (cmd=2), closes WebSocket
-
-**Important**: Do NOT call `init_session()` (cmd=29) after login — that command is for demo/real account creation, not session initialization.
-
-## Logging
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-# Loggers: pymt5.client, pymt5.transport
-```
-
-## Examples
-
-Run any example from the project root:
-
-```bash
-pip install -e .
-python examples/01_connect_and_account.py
-```
-
-| Example | Description |
-|---------|-------------|
-| `01_connect_and_account.py` | Login, full account info (cmd=3), positions/orders/deals, ping |
-| `02_market_data.py` | Symbol groups (cmd=9), symbol cache, spreads (cmd=20), OHLCV rates |
-| `03_realtime_ticks.py` | Tick subscription, account/symbol details/login status push handlers |
-| `04_trading.py` | Market/limit/stop orders, modify SL/TP, position close |
-| `05_order_book.py` | Order book (DOM) subscription (cmd=22/23) |
-| `06_all_push_notifications.py` | All 9 push notification types in one example |
-| `07_all_order_types.py` | All 9 order types + modify + cancel + close + raw trade_request |
-| `08_misc_features.py` | Corporate links, notifications, trader params, verify code, reconnect |
-
-## Command Coverage
-
-| CMD | Name | Status |
-|-----|------|--------|
-| 0 | Bootstrap | Implemented |
-| 2 | Logout | Implemented |
-| 3 | Get Account | **NEW** — balance, credit, currency, leverage, name |
-| 4 | Get Positions/Orders | Implemented |
-| 5 | Get Trade History | Implemented |
-| 6 | Get Symbols | Implemented |
-| 7 | Subscribe Ticks | Implemented |
-| 8 | Tick Push | Implemented |
-| 9 | Get Symbol Groups | **NEW** — Forex, Metals, Indexes, etc. |
-| 10 | Trade Update Push | **NEW** — order add/update/delete + balance updates |
-| 11 | Get Rates | Implemented |
-| 12 | Trade Request | Implemented |
-| 13 | Symbol Update Push | Implemented |
-| 14 | Account Update Push | **NEW** — real-time balance/equity changes |
-| 15 | Login Status Push | Implemented |
-| 17 | Symbol Details Push | **NEW** — extended quotes with options greeks |
-| 18 | Get Full Symbols | Implemented |
-| 19 | Trade Result Push | **NEW** — async trade execution results |
-| 20 | Get Spreads | **IMPROVED** — proper schema parsing |
-| 22 | Subscribe Book | **NEW** — order book / DOM subscription |
-| 23 | Book Push | **NEW** — order book push with bid/ask levels |
-| 24 | Change Password | Implemented |
-| 27 | Verify Code | Implemented |
-| 28 | Login | Implemented |
-| 29 | Init Session | Implemented |
-| 30 | Open Demo | Implemented |
-| 39 | Open Real Account | Implemented |
-| 40 | Send Verification Codes | Implemented |
-| 34 | Get Symbols (gzip) | Implemented |
-| 41 | Trader Params | Implemented |
-| 42 | Notify | Implemented |
-| 43 | OTP Setup / Disable | Implemented |
-| 44 | Get Corporate Links | **NEW** — broker links |
-| 51 | Ping | Implemented |
-| 52 | Reserved Bootstrap Command | **EXPERIMENTAL** — bootstrap-only helper with unknown business meaning |
-
-Commands 21, 25, 33, 37, 50, 52, 100-112 are still accepted by the transport allowlist but have no direct usage in the current public Web Terminal JavaScript source. Live probing on 2026-03-16 showed that 21, 25, 33, 37, 50, 100-112 time out with an empty payload, while 52 only returns an empty ACK on a pristine bootstrap-only socket and causes the server to drop the connection after `cmd=29` or `cmd=28`. Commands 39, 40, and 43 are now implemented in `pymt5`.
+See [Trading](https://cloudquant.github.io/pymt5/en/trading.html),
+[Reliability](https://cloudquant.github.io/pymt5/en/reliability.html), and
+[Protocol reference](https://cloudquant.github.io/pymt5/en/protocol_reference.html)
+for details.
 
 ## Documentation
 
-Full API documentation is available on [GitHub Pages](https://cloudquant.github.io/pymt5/).
+| English | 中文 | Contents |
+| --- | --- | --- |
+| [Documentation home](https://cloudquant.github.io/pymt5/en/) | [文档首页](https://cloudquant.github.io/pymt5/zh-CN/) | Task-based navigation and project boundaries |
+| [Quick start](https://cloudquant.github.io/pymt5/en/quickstart.html) | [快速开始](https://cloudquant.github.io/pymt5/zh-CN/quickstart.html) | Safe first connection and core workflows |
+| [User guides](https://cloudquant.github.io/pymt5/en/market_data.html) | [使用指南](https://cloudquant.github.io/pymt5/zh-CN/market_data.html) | Market data, trading, streaming, configuration |
+| [API reference](https://cloudquant.github.io/pymt5/en/api.html) | [API 参考](https://cloudquant.github.io/pymt5/zh-CN/api.html) | Client, events, data classes, exceptions, constants |
+| [Troubleshooting](https://cloudquant.github.io/pymt5/en/troubleshooting.html) | [故障排查](https://cloudquant.github.io/pymt5/zh-CN/troubleshooting.html) | Connection, login, rates, subscriptions, diagnostics |
+| [Development](https://cloudquant.github.io/pymt5/en/development.html) | [开发指南](https://cloudquant.github.io/pymt5/zh-CN/development.html) | Tests, quality gates, bilingual docs, CI |
+| [Changelog](https://cloudquant.github.io/pymt5/en/changelog.html) | [更新日志](https://cloudquant.github.io/pymt5/zh-CN/changelog.html) | Release history and compatibility notes |
 
-To build docs locally:
+Use the **English / 中文** switch on every documentation page. The site root
+also provides a language selector. Read the Docs provides versioned
+[English](https://pymt5.readthedocs.io/en/stable/) and
+[中文](https://pymt5.readthedocs.io/zh-cn/stable/) documentation; GitHub Pages
+remains available as a mirror.
 
-```bash
-pip install -e ".[docs]"
-cd docs && make html
-```
-
-## CI/CD
-
-This project uses GitHub Actions for continuous integration, testing across:
-
-| | Python 3.11 | Python 3.12 | Python 3.13 |
-|---|---|---|---|
-| **Linux** (ubuntu-latest) | ✅ | ✅ | ✅ |
-| **macOS** (macos-latest) | ✅ | ✅ | ✅ |
-| **Windows** (windows-latest) | ✅ | ✅ | ✅ |
-
-The CI pipeline also runs mypy type checking and builds the Sphinx documentation.
-For a local pre-push pass, run:
+## Development and verification
 
 ```bash
-make check
+make check                       # lint, mypy, offline tests, docs, package checks
+python docs/build_docs.py        # build /en/ and /zh-CN/
+python docs/check_docs.py        # validate links and language switches
 ```
 
-## Notes
+CI is configured for Python 3.11–3.13 on Linux, macOS, and Windows. Default
+unit tests are offline. Live integration tests require explicit
+`PYMT5_INTEGRATION=1` and authorized demo credentials; they are not implied by
+an offline pass.
 
-- This package is experimental and tracks the MT5 Web Terminal protocol as observed in the public Web Terminal build 5687 (built on 2026-03-15)
-- MetaQuotes may change the protocol at any time
-- Volume encoding: MT5 uses integer volumes where `volume = lots × 10^precision`. The MetaQuotes demo server uses precision=8, so 1.0 lot = 100,000,000 and 0.01 lot = 1,000,000
-- `get_account()` (cmd=3) returns balance, credit, currency, leverage, and name. Equity, margin, and profit are computed from positions
-- The Symbol Details push (cmd=17) schema may produce approximate values — the exact byte layout for options greeks varies by server
-- Order book (cmd=22/23) may not produce pushes on all servers — depends on broker configuration
-- Some commands like `trader_params` (cmd=41) may cause the server to close the connection on rapid successive calls
+When reporting an issue, include the server build, minimal reproduction, and
+sanitized exception output. Never include passwords, tokens, session IDs, CIDs,
+or private account/position data.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+[MIT](LICENSE) © cloudQuant. MetaTrader and MetaQuotes are trademarks of their
+respective owners; this project is independent and unofficial.

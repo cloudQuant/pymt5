@@ -2,6 +2,7 @@
 
 Gated by PYMT5_INTEGRATION=1 environment variable.
 Credentials from: PYMT5_SERVER, PYMT5_LOGIN, PYMT5_PASSWORD
+Optional PYMT5_TEST_SYMBOL selects the symbol for the live tick test.
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import pytest
 from pymt5.client import MT5WebClient
 from pymt5.events import HealthStatus
 from pymt5.transport import TransportState
+from pymt5.types import SymbolInfo
 
 pytestmark = [
     pytest.mark.skipif(
@@ -39,19 +41,23 @@ _PASSWORD = os.environ.get("PYMT5_PASSWORD", "")
 async def client():
     """Provide a connected (but not logged-in) MT5WebClient."""
     c = MT5WebClient(uri=_SERVER, timeout=30.0)
-    await c.connect()
-    yield c
-    await c.close()
+    try:
+        await c.connect()
+        yield c
+    finally:
+        await c.close()
 
 
 @pytest.fixture
 async def logged_in_client():
     """Provide a connected AND logged-in MT5WebClient."""
     c = MT5WebClient(uri=_SERVER, timeout=30.0)
-    await c.connect()
-    await c.login(login=_LOGIN, password=_PASSWORD, auto_heartbeat=False)
-    yield c
-    await c.close()
+    try:
+        await c.connect()
+        await c.login(login=_LOGIN, password=_PASSWORD, auto_heartbeat=False)
+        yield c
+    finally:
+        await c.close()
 
 
 # ---------------------------------------------------------------------------
@@ -94,40 +100,46 @@ async def test_login_logout_cycle():
 async def test_symbol_load(logged_in_client: MT5WebClient):
     """Connect, login, load_symbols, verify at least 1 symbol."""
     symbols = await logged_in_client.load_symbols()
-    assert isinstance(symbols, list)
+    assert isinstance(symbols, dict)
     assert len(symbols) >= 1
-    # Each symbol should have at minimum a trade_symbol field
-    first = symbols[0]
-    assert "trade_symbol" in first
-    assert len(first["trade_symbol"]) > 0
+    first = next(iter(symbols.values()))
+    assert isinstance(first, SymbolInfo)
+    assert first.name
+    assert first.symbol_id > 0
 
 
 @pytest.mark.asyncio
 async def test_tick_subscription(logged_in_client: MT5WebClient):
-    """Connect, login, load_symbols, subscribe first symbol, wait for tick, unsubscribe."""
+    """Subscribe the selected symbol, wait for its tick, and unsubscribe."""
     symbols = await logged_in_client.load_symbols()
     assert len(symbols) >= 1
 
-    # Pick the first symbol's ID
-    first_id = int(symbols[0]["symbol_id"])
+    requested = os.environ.get("PYMT5_TEST_SYMBOL", "").strip()
+    if requested and requested not in symbols:
+        pytest.fail(f"PYMT5_TEST_SYMBOL {requested!r} is not in the server symbol list")
+    symbol = symbols[requested] if requested else next(iter(symbols.values()))
+    symbol_id = symbol.symbol_id
     tick_received = asyncio.Event()
     received_ticks: list[dict] = []
 
     def on_tick(tick_data):
-        received_ticks.append(tick_data)
-        tick_received.set()
+        matching = [tick for tick in tick_data if tick.get("symbol_id") == symbol_id]
+        if matching:
+            received_ticks.extend(matching)
+            tick_received.set()
 
     logged_in_client.on_tick(on_tick)
-    await logged_in_client.subscribe_ticks([first_id])
-
-    # Wait up to 30 seconds for a tick
+    await logged_in_client.subscribe_ticks([symbol_id])
     try:
-        await asyncio.wait_for(tick_received.wait(), timeout=30.0)
-    except TimeoutError:
-        pytest.skip("No tick received within 30s (market may be closed)")
+        # Wait up to 30 seconds for a tick.
+        try:
+            await asyncio.wait_for(tick_received.wait(), timeout=30.0)
+        except TimeoutError:
+            pytest.skip("No tick received within 30s (market may be closed)")
 
-    assert len(received_ticks) >= 1
-    await logged_in_client.unsubscribe_ticks([first_id])
+        assert len(received_ticks) >= 1
+    finally:
+        await logged_in_client.unsubscribe_ticks([symbol_id])
 
 
 @pytest.mark.asyncio

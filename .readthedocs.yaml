@@ -4,9 +4,14 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.12"
+  jobs:
+    build:
+      html:
+        - python docs/build_docs.py --readthedocs
 
 sphinx:
   configuration: docs/conf.py
+  fail_on_warning: true
 
 python:
   install:
