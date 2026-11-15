@@ -85,6 +85,18 @@ def _make_mock_ws(messages: list | None = None) -> _MockWS:
     return _MockWS(messages)
 
 
+class _OpenMockWS(_MockWS):
+    """Keep a successful handshake socket open after its bootstrap frame."""
+
+    def __aiter__(self):
+        async def messages():
+            for message in self._messages:
+                yield message
+            await asyncio.Event().wait()
+
+        return messages()
+
+
 # ============================================================================
 # 1. connect()
 # ============================================================================
@@ -101,7 +113,7 @@ class TestConnect:
         init_cipher = initial_cipher()
         response_bytes = _build_encrypted_response(init_cipher, CMD_BOOTSTRAP, code=0, body=bootstrap_body)
 
-        mock_ws = _make_mock_ws(messages=[response_bytes])
+        mock_ws = _OpenMockWS(messages=[response_bytes])
 
         with patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws):
             await t.connect()
@@ -111,6 +123,7 @@ class TestConnect:
         assert isinstance(t.cipher, AESCipher)
         assert t.cipher.key == b"\xcd" * 16
         assert t.ws is mock_ws
+        await t.close()
 
     async def test_connect_bootstrap_bad_code_raises(self):
         """Bootstrap response with non-zero code raises RuntimeError."""
@@ -120,7 +133,7 @@ class TestConnect:
         init_cipher = initial_cipher()
         response_bytes = _build_encrypted_response(init_cipher, CMD_BOOTSTRAP, code=1, body=bootstrap_body)
 
-        mock_ws = _make_mock_ws(messages=[response_bytes])
+        mock_ws = _OpenMockWS(messages=[response_bytes])
 
         with (
             patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws),
@@ -136,7 +149,7 @@ class TestConnect:
         init_cipher = initial_cipher()
         response_bytes = _build_encrypted_response(init_cipher, CMD_BOOTSTRAP, code=0, body=short_body)
 
-        mock_ws = _make_mock_ws(messages=[response_bytes])
+        mock_ws = _OpenMockWS(messages=[response_bytes])
 
         with (
             patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws),
@@ -152,7 +165,7 @@ class TestConnect:
         init_cipher = initial_cipher()
         response_bytes = _build_encrypted_response(init_cipher, CMD_BOOTSTRAP, code=0, body=bootstrap_body)
 
-        mock_ws = _make_mock_ws(messages=[response_bytes])
+        mock_ws = _OpenMockWS(messages=[response_bytes])
 
         with patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws):
             await t.connect()
@@ -163,6 +176,7 @@ class TestConnect:
         assert isinstance(sent_data, bytes)
         # The sent data is pack_outer(encrypted bootstrap). Just ensure it's non-empty.
         assert len(sent_data) > 8  # at least the outer header
+        await t.close()
 
     async def test_double_connect_closes_first(self):
         """Calling connect() when already connected closes existing connection first."""
@@ -172,8 +186,8 @@ class TestConnect:
         init_cipher = initial_cipher()
         response_bytes = _build_encrypted_response(init_cipher, CMD_BOOTSTRAP, code=0, body=bootstrap_body)
 
-        mock_ws1 = _make_mock_ws(messages=[response_bytes])
-        mock_ws2 = _make_mock_ws(messages=[response_bytes])
+        mock_ws1 = _OpenMockWS(messages=[response_bytes])
+        mock_ws2 = _OpenMockWS(messages=[response_bytes])
 
         with patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws1):
             await t.connect()
@@ -186,6 +200,7 @@ class TestConnect:
         # First ws should have been closed
         mock_ws1.close.assert_called_once()
         assert t.ws is mock_ws2
+        await t.close()
 
     async def test_connect_starts_recv_task(self):
         """connect() creates a _recv_task."""
@@ -195,7 +210,7 @@ class TestConnect:
         init_cipher = initial_cipher()
         response_bytes = _build_encrypted_response(init_cipher, CMD_BOOTSTRAP, code=0, body=bootstrap_body)
 
-        mock_ws = _make_mock_ws(messages=[response_bytes])
+        mock_ws = _OpenMockWS(messages=[response_bytes])
 
         with patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws):
             await t.connect()
@@ -869,7 +884,7 @@ class TestEdgeCases:
         init_cipher = initial_cipher()
         response_bytes = _build_encrypted_response(init_cipher, CMD_BOOTSTRAP, code=0, body=bootstrap_body)
 
-        mock_ws = _make_mock_ws(messages=[response_bytes])
+        mock_ws = _OpenMockWS(messages=[response_bytes])
 
         with patch("pymt5.transport.websockets.connect", new_callable=AsyncMock, return_value=mock_ws):
             await t.connect()

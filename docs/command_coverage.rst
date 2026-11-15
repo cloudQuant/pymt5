@@ -1,9 +1,11 @@
 MT5 Web Terminal Command Coverage
 =================================
 
-This page tracks command IDs seen in the MT5 Web Terminal frontend chunk
-``analysis/D8ROuLSQ.js`` (captured on 2026-03-12) and compares them with the
-public ``pymt5`` API as of 2026-03-16.
+This page tracks command IDs seen in a privately retained MT5 Web Terminal
+frontend chunk ``D8ROuLSQ.js`` (captured on 2026-03-12) and compares them with
+the public ``pymt5`` API as of 2026-03-16. Third-party JavaScript snapshots are
+kept outside the public repository; only the derived protocol facts and local
+static-analysis helpers remain in the project.
 
 The live site was re-checked on 2026-03-16. The current official terminal entry
 page reports build ``5687``, built on 2026-03-15, and still loads the same API

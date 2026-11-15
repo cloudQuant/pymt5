@@ -6,10 +6,14 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +43,7 @@ jobs:
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -59,11 +64,12 @@ jobs:
 
       - name: Type check with mypy
         run: |
-          python -m mypy pymt5/ --ignore-missing-imports --no-strict-optional
+          python -m mypy pymt5/ --ignore-missing-imports
 
   build:
     name: Build Verification
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -79,12 +85,14 @@ jobs:
 
       - name: Build and check package
         run: |
+          python -c "import shutil; from pathlib import Path; [shutil.rmtree(path, ignore_errors=True) for path in (Path('build'), Path('dist'), Path('mt5_web_client.egg-info'))]"
           python -m build
-          twine check dist/*
+          twine check --strict dist/*
 
   docs:
     name: Build Documentation
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -99,7 +107,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[docs]"
 
-      - name: Build docs
-        working-directory: docs
+      - name: Build bilingual docs
         run: |
-          python -m sphinx . _build/html -W --keep-going
+          python docs/build_docs.py
+
+      - name: Check generated documentation
+        run: |
+          python docs/check_docs.py

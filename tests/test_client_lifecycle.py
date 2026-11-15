@@ -166,14 +166,15 @@ async def test_close_stops_heartbeat():
     assert client._heartbeat_task is None
 
 
-async def test_close_swallows_logout_error():
-    """close() catches errors from logout() and proceeds gracefully."""
+async def test_close_propagates_logout_error_after_cleanup():
+    """close() reports a logout failure after closing the transport."""
     client = MT5WebClient()
     client._logged_in = True
     client.transport.send_command = AsyncMock(side_effect=RuntimeError("gone"))
     client.transport.close = AsyncMock()
 
-    await client.close()
+    with pytest.raises(RuntimeError, match="gone"):
+        await client.close()
     assert client._logged_in is False
     client.transport.close.assert_awaited_once()
 
@@ -958,8 +959,10 @@ async def test_close_waits_for_inflight_login_then_closes_session():
     assert not close_task.done()
     assert sent == [CMD_LOGIN]
     release_login.set()
-    await asyncio.gather(login_task, close_task)
-    assert sent == [CMD_LOGIN, CMD_LOGOUT]
+    with pytest.raises(SessionError, match="login invalidated by close"):
+        await login_task
+    await close_task
+    assert sent == [CMD_LOGIN]
     assert client._logged_in is False
     assert client._login_kwargs is None
     assert not transport.is_ready
@@ -967,7 +970,7 @@ async def test_close_waits_for_inflight_login_then_closes_session():
         await client.trade_request(trade_action=1, volume=1)
 
 
-async def test_close_stops_late_heartbeat_if_logout_fails():
+async def test_close_prevents_late_login_starting_heartbeat():
     client = MT5WebClient()
     transport = _StatefulReconnectTransport()
     await transport.connect()
@@ -1004,10 +1007,11 @@ async def test_close_stops_late_heartbeat_if_logout_fails():
     await close_started.wait()
     assert not close_task.done()
     release_login.set()
-    await asyncio.gather(login_task, close_task)
+    with pytest.raises(SessionError, match="login invalidated by close"):
+        await login_task
+    await close_task
     await asyncio.sleep(0)
-    assert len(heartbeats) == 1
-    assert heartbeats[0] is not None and heartbeats[0].done()
+    assert heartbeats == []
     assert client._heartbeat_task is None
     assert client._logged_in is False
     assert client._login_kwargs is None

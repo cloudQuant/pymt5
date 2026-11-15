@@ -276,7 +276,7 @@ class TestCredentialClearing:
 
 
 class TestCloseLogsError:
-    """Test that close() logs exceptions instead of silently swallowing."""
+    """Test that close() reports exceptions after cleaning up."""
 
     async def test_close_logs_logout_failure(self):
         from pymt5.client import MT5WebClient
@@ -285,12 +285,13 @@ class TestCloseLogsError:
         client._logged_in = True
 
         with (
-            patch.object(client, "logout", side_effect=RuntimeError("logout fail")),
-            patch.object(client.transport, "close", new_callable=AsyncMock),
+            patch.object(client, "_logout_unlocked", side_effect=RuntimeError("logout fail")),
+            patch.object(client.transport, "close", new_callable=AsyncMock) as close_transport,
+            pytest.raises(RuntimeError, match="logout fail"),
         ):
-            # Should not raise
             await client.close()
-            assert not client._logged_in
+        assert not client._logged_in
+        close_transport.assert_awaited_once()
 
 
 # =====================================================================

@@ -39,7 +39,7 @@ def test_login_packet_size_matches_browser_capture():
         login=12345678,
         password="test-password",
         url="",
-        session=0,
+        session=0x0102030405060708,
         otp="",
         version=0,
         cid=b"0123456789abcdef",
@@ -48,9 +48,12 @@ def test_login_packet_size_matches_browser_capture():
         utm_campaign="",
         utm_source="",
     )
-    assert len(payload) == 912
+    assert len(payload) == 920
+    assert struct.unpack_from("<Q", payload, 736) == (12345678,)
+    assert payload[744:904] == bytes(160)
+    assert struct.unpack_from("<QQ", payload, 904) == (0x0102030405060708, 0)
     inner = build_command(28, payload)
-    assert len(inner) == 916
+    assert len(inner) == 924
     encrypted = initial_cipher().encrypt(inner)
     assert len(encrypted) == 928
     outer = pack_outer(encrypted)

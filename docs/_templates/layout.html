@@ -1,0 +1,12 @@
+{% extends "!layout.html" %}
+{% from "language_switch.html" import language_switch with context %}
+
+{% block sidebartitle %}
+{{ super() }}
+{{ language_switch() }}
+{% endblock %}
+
+{% block mobile_nav %}
+{{ super() }}
+{{ language_switch() }}
+{% endblock %}

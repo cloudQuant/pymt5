@@ -13,9 +13,17 @@ class MT5ConnectionError(PyMT5Error, ConnectionError):
 
     Attributes:
         server_uri: The URI of the server that was being connected to.
+
     """
 
     def __init__(self, message: str = "", *, server_uri: str = "") -> None:
+        """Initialize a connection error with its target server.
+
+        Args:
+            message: Human-readable description of the connection failure.
+            server_uri: URI of the server involved in the failure, if known.
+
+        """
         super().__init__(message)
         self.server_uri = server_uri
 
@@ -34,6 +42,7 @@ class TradeError(PyMT5Error, ValueError):
         retcode: MT5 return code.
         symbol: Symbol involved in the trade.
         action: Trade action that failed.
+
     """
 
     def __init__(
@@ -44,6 +53,15 @@ class TradeError(PyMT5Error, ValueError):
         symbol: str = "",
         action: int = 0,
     ) -> None:
+        """Initialize a trade error with server and operation context.
+
+        Args:
+            message: Human-readable description of the trade failure.
+            retcode: MT5 return code associated with the failure.
+            symbol: Symbol involved in the operation, if known.
+            action: Numeric trade action that failed, if known.
+
+        """
         super().__init__(message)
         self.retcode = retcode
         self.symbol = symbol

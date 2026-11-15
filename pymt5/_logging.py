@@ -23,17 +23,22 @@ def get_logger(name: str) -> Any:
     """Return a structured logger for *name*.
 
     Tries ``structlog`` first; falls back to :func:`logging.getLogger`.
-    If ``PYMT5_LOG_LEVEL`` is set, the stdlib logger level is configured
-    accordingly.
+    ``PYMT5_LOG_LEVEL`` filters either logger type without changing global
+    structlog configuration. Invalid level names are ignored.
     """
+    level = getattr(logging, _LOG_LEVEL.upper(), None) if _LOG_LEVEL is not None else None
     try:
         import structlog  # type: ignore[import-untyped]
 
+        if isinstance(level, int):
+            return structlog.wrap_logger(
+                None,
+                wrapper_class=structlog.make_filtering_bound_logger(level),
+                logger_factory_args=(name,),
+            )
         return structlog.get_logger(name)
     except ImportError:
         logger = logging.getLogger(name)
-        if _LOG_LEVEL is not None:
-            level = getattr(logging, _LOG_LEVEL.upper(), None)
-            if isinstance(level, int):
-                logger.setLevel(level)
+        if isinstance(level, int):
+            logger.setLevel(level)
         return logger

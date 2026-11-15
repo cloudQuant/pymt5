@@ -512,6 +512,7 @@ async def test_copy_rates_wrappers():
 
 async def test_get_full_symbol_info_parses_extended_bond_fields():
     client = MT5WebClient()
+    client._symbols["OFZ26238"] = SymbolInfo(name="OFZ26238", symbol_id=1234, digits=2)
     trade = SeriesCodec.serialize(
         [
             (11, "Bonds\\MOEX\\OFZ26238", 256),
@@ -616,6 +617,7 @@ async def test_get_full_symbol_info_parses_extended_bond_fields():
 
     info = await client.get_full_symbol_info("OFZ26238")
 
+    client.transport.send_command.assert_awaited_once_with(18, struct.pack("<II", 1, 1234))
     assert info is not None
     assert info["face_value"] == pytest.approx(1000.0)
     assert info["accrued_interest"] == pytest.approx(12.5)

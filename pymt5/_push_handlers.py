@@ -33,6 +33,8 @@ from pymt5.schemas import (
     ORDER_SCHEMA,
     POSITION_FIELD_NAMES,
     POSITION_SCHEMA,
+    SYMBOL_DETAILS_6320_FIELD_NAMES,
+    SYMBOL_DETAILS_6320_SCHEMA,
     SYMBOL_DETAILS_FIELD_NAMES,
     SYMBOL_DETAILS_SCHEMA,
     TRADE_RESULT_PUSH_FIELD_NAMES,
@@ -45,7 +47,7 @@ from pymt5.schemas import (
     TRADE_UPDATE_BALANCE_SCHEMA,
 )
 from pymt5.transport import CommandResult
-from pymt5.types import Record, RecordList
+from pymt5.types import Record, RecordList, TickPriceMode
 
 if TYPE_CHECKING:
     from pymt5.transport import MT5WebSocketTransport
@@ -72,6 +74,9 @@ class _PushHandlersMixin:
     _tick_history_by_id: dict[int, deque[Record]]
     _tick_history_by_name: dict[str, deque[Record]]
     _tick_history_access_order: list[int]
+    _tick_price_mode: TickPriceMode
+    _tick_price_modes: dict[str, TickPriceMode]
+    _tick_price_warning_keys: set[tuple[str, str]]
     _book_cache_by_id: dict[int, Record]
     _book_cache_by_name: dict[str, Record]
     # Typed handler lists (Phase 16.1)
@@ -82,10 +87,53 @@ class _PushHandlersMixin:
     # Callback error handlers (Phase 16.2)
     _callback_error_handlers: list[Callable]
 
+    def _parse_ticks(self, body: bytes | None) -> RecordList:
+        """Parse every tick delivery path with the same client configuration."""
+        warning_keys = getattr(self, "_tick_price_warning_keys", None)
+        if warning_keys is None:
+            warning_keys = set()
+            self._tick_price_warning_keys = warning_keys
+
+        def report_auto_decision(symbol: str, decision: str, raw: float, parsed: float) -> None:
+            key = (symbol or "<unknown>", "auto")
+            if key in warning_keys:
+                return
+            warning_keys.add(key)
+            logger.warning(
+                "tick price auto mode chose %s for %s (raw=%r parsed=%r); "
+                "this is a compatibility heuristic, configure an explicit tick price mode after wire-format sampling",
+                decision,
+                symbol or "<unknown>",
+                raw,
+                parsed,
+            )
+
+        return _parse_tick_batch(
+            body,
+            self._symbols_by_id,
+            self._tick_cache_by_id,
+            getattr(self, "_tick_price_mode", "auto"),
+            getattr(self, "_tick_price_modes", {}),
+            report_auto_decision,
+        )
+
     def on_tick(self, callback: Callable[[RecordList], None]) -> Callable:
+        """Register a callback for decoded tick batches.
+
+        Args:
+            callback: Callable invoked with the list of ticks decoded from each
+                tick command frame. Parsing failures are logged and are not
+                propagated to the transport dispatch loop.
+
+        Returns:
+            The internal transport handler, suitable for passing to
+            :meth:`MT5WebSocketTransport.off` when unregistering.
+
+        """
+
         def _handler(result: CommandResult) -> None:
             try:
-                callback(_parse_tick_batch(result.body, self._symbols_by_id, self._tick_cache_by_id))
+                callback(self._parse_ticks(result.body))
             except _PARSE_ERRORS as exc:
                 logger.error("tick parse error: %s", exc)
 
@@ -93,10 +141,12 @@ class _PushHandlersMixin:
         return _handler
 
     def on_position_update(self, callback: Callable[[RecordList], None]) -> Callable:
-        """Register callback for position change push notifications.
+        """Register a callback for position records from cmd=4 frames.
 
-        The server pushes cmd=4 data when positions or orders change.
-        Returns the internal handler for use with transport.off().
+        Ordinary position/order query responses also invoke this callback.
+        An unsolicited cmd=4 change push has not been verified; the callback
+        does not distinguish responses from pushes. Returns the internal handler
+        for use with transport.off().
         """
 
         def _handler(result: CommandResult) -> None:
@@ -111,10 +161,12 @@ class _PushHandlersMixin:
         return _handler
 
     def on_order_update(self, callback: Callable[[RecordList], None]) -> Callable:
-        """Register callback for order change push notifications.
+        """Register a callback for order records from cmd=4 frames.
 
-        Parses orders from the same cmd=4 push.
-        Returns the internal handler for use with transport.off().
+        Ordinary position/order query responses also invoke this callback.
+        An unsolicited cmd=4 change push has not been verified; the callback
+        does not distinguish responses from pushes. Returns the internal handler
+        for use with transport.off().
         """
 
         def _handler(result: CommandResult) -> None:
@@ -132,12 +184,13 @@ class _PushHandlersMixin:
         return _handler
 
     def on_trade_update(self, callback: Callable[[dict[str, RecordList]], None]) -> Callable:
-        """Register callback for combined position+order push notifications.
+        """Register a callback for combined position/order cmd=4 frames.
 
-        Parses both positions and orders from cmd=4 push into a single dict
-        with keys 'positions' and 'orders'. More efficient than registering
-        separate on_position_update and on_order_update handlers.
-        Returns the internal handler for use with transport.off().
+        The callback receives a dict with ``positions`` and ``orders`` and is
+        also invoked by ordinary position/order query responses. An unsolicited
+        cmd=4 change push has not been verified, and this callback does not
+        distinguish responses from pushes. Returns the internal handler for use
+        with transport.off().
         """
 
         def _handler(result: CommandResult) -> None:
@@ -195,21 +248,28 @@ class _PushHandlersMixin:
     def on_symbol_details(self, callback: Callable[[RecordList], None]) -> Callable:
         """Register callback for extended symbol quote data (cmd=17).
 
-        Receives detailed quote data including options greeks (delta, gamma, theta,
-        vega, rho, omega), session statistics, and price limits.
+        Build 6320 prices are raw wire values: divide by 10 ** symbol digits
+        when appropriate. The fields mask indicates presence; an unmarked zero
+        must not be interpreted as a current quote. Other builds use the legacy
+        layout and are not asserted to match build 6320.
         """
-        detail_size = get_series_size(SYMBOL_DETAILS_SCHEMA)
-
         def _handler(result: CommandResult) -> None:
             try:
+                build_6320 = self.transport.server_build == 6320
+                schema = SYMBOL_DETAILS_6320_SCHEMA if build_6320 else SYMBOL_DETAILS_SCHEMA
+                field_names = SYMBOL_DETAILS_6320_FIELD_NAMES if build_6320 else SYMBOL_DETAILS_FIELD_NAMES
+                detail_size = get_series_size(schema)
+                if build_6320 and len(result.body) % detail_size:
+                    logger.error("symbol details body length is not a multiple of %d", detail_size)
+                    return
                 count = len(result.body) // detail_size
                 details = []
                 offset = 0
                 for _ in range(count):
                     if offset + detail_size > len(result.body):
                         break
-                    vals = SeriesCodec.parse_at(result.body, SYMBOL_DETAILS_SCHEMA, offset)
-                    d = dict(zip(SYMBOL_DETAILS_FIELD_NAMES, vals))
+                    vals = SeriesCodec.parse_at(result.body, schema, offset)
+                    d = dict(zip(field_names, vals))
                     sym_info = self._symbols_by_id.get(d["symbol_id"])
                     if sym_info:
                         d["symbol"] = sym_info.name
@@ -249,9 +309,10 @@ class _PushHandlersMixin:
         return _handler
 
     def on_trade_transaction(self, callback: Callable[[Record], None]) -> Callable:
-        """Register callback for trade update push (cmd=10).
+        """Register callback for cmd=10 trade transaction frames.
 
-        Receives real-time trade state changes:
+        Build 6320 Web Terminal listens for trade state changes on cmd=10;
+        a real trade push has not been verified. The parser supports:
         - type=2: Balance update with deals and positions arrays
         - type!=2: Order transaction (add/update/delete)
 
@@ -326,7 +387,7 @@ class _PushHandlersMixin:
 
         def _handler(result: CommandResult) -> None:
             try:
-                ticks = _parse_tick_batch(result.body, self._symbols_by_id, self._tick_cache_by_id)
+                ticks = self._parse_ticks(result.body)
                 for tick in ticks:
                     event = TickEvent(
                         symbol_id=int(tick.get("symbol_id", 0)),
@@ -435,7 +496,7 @@ class _PushHandlersMixin:
 
     def _cache_tick_push(self, result: CommandResult) -> None:
         try:
-            for tick in _parse_tick_batch(result.body, self._symbols_by_id, self._tick_cache_by_id):
+            for tick in self._parse_ticks(result.body):
                 symbol_id = int(tick["symbol_id"])
                 self._tick_cache_by_id[symbol_id] = tick
                 # Atomic deque creation via setdefault to avoid race conditions
@@ -473,6 +534,7 @@ class _PushHandlersMixin:
         Args:
             symbol_id: If provided, clear only that symbol's history.
                        If ``None``, clear all tick history.
+
         """
         if symbol_id is not None:
             self._tick_history_by_id.pop(symbol_id, None)

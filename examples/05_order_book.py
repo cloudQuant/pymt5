@@ -18,9 +18,9 @@ from pymt5 import MT5WebClient, AuthenticationError, MT5ConnectionError, PyMT5Er
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("example05")
 
-SERVER = "wss://web.metatrader.app/terminal"
-LOGIN = 5047785364
-PASSWORD = "NyCh-i4r"
+SERVER = os.environ["PYMT5_SERVER"]
+LOGIN = int(os.environ["PYMT5_LOGIN"])
+PASSWORD = os.environ["PYMT5_PASSWORD"]
 
 BOOK_SYMBOLS = ["EURUSD", "GBPUSD"]
 LISTEN_SECONDS = 15

@@ -31,9 +31,9 @@ from pymt5.protocol import (
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("live_test")
 
-WS_URI = "wss://web.metatrader.app/terminal"
-LOGIN = 5047785364
-PASSWORD = "NyCh-i4r"
+WS_URI = os.environ["PYMT5_SERVER"]
+LOGIN = int(os.environ["PYMT5_LOGIN"])
+PASSWORD = os.environ["PYMT5_PASSWORD"]
 
 
 def hex_dump(data: bytes, limit: int = 128) -> str:

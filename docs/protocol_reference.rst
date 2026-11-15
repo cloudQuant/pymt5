@@ -65,17 +65,31 @@ After decryption, the inner body has the following layout::
 
 **Response frames** (server to client):
 
-- Bytes 0-1 are echoed from the request (ignored by the parser).
+- Bytes 0-1 contain a two-byte prefix that the parser currently discards.
+  A sanitized read-only sample against build 6320 on 2026-11-14 found no match
+  between request and response prefixes in 10 response frames across commands
+  0, 3, 6, 9, 20, 41, 44, and 51. One ``cmd=6`` request produced two response
+  frames. This is negative evidence against the echo assumption, not proof for
+  every server build; the client does not rely on the prefix for correlation.
 - Bytes 2-3 are the ``command_id``.
 - Byte 4 is the ``response_code`` (0 = success).
 - Bytes 5+ are the response body.
 
+Requests with the same command are serialized. If sending may have occurred and
+the result is uncertain because of a timeout, cancellation, or send failure, the
+connection is isolated and other in-flight requests fail; a later request cannot
+reuse that connection. This protects against the observed late-response sequence,
+but does not distinguish an unsolicited push or duplicate response sharing the
+command ID from a response. The server-side result of a timed-out or cancelled
+trade remains unknown and must be reconciled before any retry.
+
 Key Exchange
 ------------
 
-The connection begins with an **unencrypted bootstrap** phase. The initial
-cipher uses a hard-coded obfuscated key (``INITIAL_KEY_OBFUSCATED`` in
-``constants.py``) decoded via a simple character-shift algorithm.
+The connection begins with a **bootstrap phase encrypted by the initial,
+hard-coded AES key**, before a session key has been negotiated. The initial
+cipher decodes ``INITIAL_KEY_OBFUSCATED`` in ``constants.py`` via a simple
+character-shift algorithm.
 
 Bootstrap Flow (cmd=0)
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -210,7 +224,7 @@ Commands marked "push" are server-initiated notifications.
      - **Push**: Login status change (forced logout, session expiry).
    * - 17
      - ``CMD_SYMBOL_DETAILS_PUSH``
-     - **Push**: Extended symbol quote data (greeks, session stats).
+     - **Push**: Extended symbol quote data; build-specific layout.
    * - 18
      - ``CMD_GET_FULL_SYMBOLS``
      - Retrieve full symbol specifications (contract details).
@@ -357,6 +371,27 @@ use **little-endian** byte order.
      - LE
      - Unsigned 64-bit integer (``int.from_bytes(..., signed=False)``).
 
+Full Symbol Queries (cmd=18)
+----------------------------
+
+On the observed build 6320 server, a request consists of a little-endian
+``uint32`` count followed by that many little-endian ``uint32`` symbol IDs.
+The response contains a count followed by full symbol records. The public
+``get_full_symbol_info(name)`` resolves the name first and requests one ID;
+it rejects nonzero codes, invalid lengths, and mismatched records.
+
+Symbol Detail Notifications (cmd=17)
+------------------------------------
+
+Build 6320 sends consecutive 274-byte records without a count prefix. The
+first fields are a ``uint32`` symbol ID, an ``int64`` field mask, an ``int32``
+timestamp in seconds, an unknown ``uint32``, and nine ``float64`` values:
+bid last/high/low, ask last/high/low, and last last/high/low. Only values
+whose mask bits are set should be interpreted as updates. These prices are raw
+wire values; the web client scales them by the symbol's digits capped at eight.
+The parser uses this layout only for observed build 6320; unknown builds
+retain the legacy layout. Unidentified fields are not labeled as Greeks.
+
 Tick Push Notifications (cmd=8)
 -------------------------------
 
@@ -366,16 +401,18 @@ streams tick updates as ``CMD_TICK_PUSH`` (cmd=8) push notifications.
 Tick Body Format
 ~~~~~~~~~~~~~~~~
 
-The response body contains a 4-byte count followed by repeated tick records::
+The build 6320 Web Terminal parser treats the body as consecutive fixed-size
+records, without a count prefix. The current client uses the same layout::
 
     +--------+--------+---------------------------+
     | Offset | Size   | Description               |
     +--------+--------+---------------------------+
-    | 0      | 4      | tick_count (uint32 LE)    |
-    | 4      | 42 * N | tick records              |
+    | 0      | 50 * N | tick records              |
     +--------+--------+---------------------------+
 
-Each tick record (42 bytes) follows the ``TICK_SCHEMA``:
+Each tick record (50 bytes) follows the ``TICK_SCHEMA``. This layout is based
+on the public Web Terminal implementation and offline tests; a live tick sample
+has not yet validated it for the demo server or other builds:
 
 .. list-table:: Tick Record Fields
    :header-rows: 1
@@ -624,6 +661,11 @@ response length fits both layouts, the default ``auto`` mode raises
 or pass ``bar_format`` to the rates methods after identifying the server's
 format. Lengths not divisible by the selected record size are rejected; length
 checks cannot detect truncation that happens to match a supported format.
+
+The request ``from``/``to`` fields and the returned bar ``time`` are signed
+I32 Unix seconds. This wire layout cannot represent dates after
+2038-01-19 03:14:07 UTC. The client preserves the observed layout rather than
+silently widening these fields.
 
 .. list-table:: Rate Bar Fields
    :header-rows: 1

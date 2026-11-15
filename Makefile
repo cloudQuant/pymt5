@@ -10,13 +10,15 @@ format:
 	ruff format pymt5/ tests/
 
 docs:
-	cd docs && python -m sphinx . _build/html -W --keep-going
+	python docs/build_docs.py
+	python docs/check_docs.py
 
 typecheck:
-	python -m mypy pymt5/ --ignore-missing-imports --no-strict-optional
+	python -m mypy pymt5/ --ignore-missing-imports
 
 package-check:
-	python -m build --no-isolation
-	python -m twine check dist/*
+	python -c "import shutil; from pathlib import Path; [shutil.rmtree(path, ignore_errors=True) for path in (Path('build'), Path('dist'), Path('mt5_web_client.egg-info'))]"
+	python -m build
+	python -m twine check --strict dist/*
 
 check: lint typecheck test docs package-check

@@ -1,74 +1,121 @@
 pymt5 Documentation
-====================
+===================
 
-**pymt5** is a Python client for the MT5 Web Terminal via reverse-engineered WebSocket binary protocol.
+**pymt5** is an asynchronous Python client for the MetaTrader 5 Web Terminal.
+It connects over a reverse-engineered, encrypted WebSocket binary protocol and
+provides account queries, market data, streaming callbacks, and trading helpers.
 
-It provides full access to account data, market data, real-time streaming, and trading operations
-through a clean async Python API.
+The PyPI distribution is named ``mt5-web-client``; the Python import is
+``pymt5``. Python 3.11 or newer is required.
+
+.. warning::
+
+   This is an unofficial, experimental client. It is not affiliated with or
+   endorsed by MetaQuotes. Protocol behavior varies by broker, server build,
+   symbol, and market session. Start with an authorized demo account, validate
+   every required workflow, and never treat a request timeout as proof that a
+   trade was not executed.
+
+Choose your path
+----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 48 28
+
+   * - I want to…
+     - Start here
+     - Then read
+   * - Install and make a first read-only connection
+     - :doc:`installation` and :doc:`quickstart`
+     - :doc:`configuration`
+   * - Retrieve bars or stream ticks and order-book updates
+     - :doc:`market_data`
+     - :doc:`push_notifications`
+   * - Use trading helpers on an authorized demo account
+     - :doc:`trading`
+     - :doc:`security` and :doc:`reliability`
+   * - Handle disconnects, timeouts, and server rejections
+     - :doc:`reliability`
+     - :doc:`troubleshooting`
+   * - Look up a method, command, or compatibility helper
+     - :doc:`api`
+     - :doc:`protocol_reference` and :doc:`python_api_compat`
+   * - Run tests or improve the documentation
+     - :doc:`development`
+     - :doc:`changelog`
+
+Quick installation
+------------------
+
+.. code-block:: bash
+
+   python -m pip install mt5-web-client
+
+A first connection should load account and symbol data without placing an
+order. See :doc:`quickstart` for a complete environment-based example.
+
+Capabilities and boundaries
+---------------------------
+
+- Async WebSocket lifecycle, bootstrap key exchange, login, heartbeat, and
+  optional automatic reconnection.
+- Account, position, order, deal, symbol, historical-bar, tick, and order-book
+  APIs.
+- Raw and typed push callbacks, local caches, optional metrics, and structured
+  logging.
+- High-level trading helpers plus a lower-level ``trade_request()`` API.
+- MetaTrader5-style compatibility helpers where the Web Terminal exposes an
+  equivalent; local or cached helpers are identified as such.
+- Explicit compatibility controls for tick prices, historical bar layouts, and
+  trade request profiles. Observed support for one build is not a guarantee for
+  another server.
+
+Documentation map
+-----------------
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents
+   :caption: Get started
 
+   installation
    quickstart
-   api
+   configuration
+   examples
+
+.. toctree::
+   :maxdepth: 2
+   :caption: User guides
+
+   market_data
    trading
    push_notifications
+   reliability
+   security
+   troubleshooting
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Reference
+
+   api
    protocol_reference
    command_coverage
    python_api_compat
    python_api_detailed_comparison
-   iteration_plan
-   iteration_plan_v2
-   iteration_plan_v3
-   iteration_plan_v4
-   iteration_plan_v5
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Project
+
+   development
+   author
    changelog
 
-Features
---------
+Project links
+-------------
 
-- WebSocket transport to ``wss://web.metatrader.app/terminal``
-- AES-CBC encryption with zero IV and PKCS7 padding
-- Bootstrap handshake with automatic key exchange
-- Login with UTF-16LE encoded fields
-- Full account information (balance, equity, margin, leverage)
-- Open positions, pending orders, and trade history
-- Symbol cache with fast name-to-ID lookup
-- Historical OHLCV bars (M1 to MN1)
-- Real-time tick streaming with callbacks
-- Order book (depth-of-market) subscription
-- All 9 order types: market buy/sell, limit, stop, stop-limit
-- Position close, modify SL/TP, cancel pending orders
-- 9 push notification types for real-time updates
-- Auto heartbeat and auto reconnect with exponential backoff
-- Async context manager support
-
-Requirements
-------------
-
-- Python 3.11+
-- ``websockets >= 12.0``
-- ``cryptography >= 42.0.0``
-
-Installation
-------------
-
-.. code-block:: bash
-
-   pip install mt5-web-client
-
-Or install from source:
-
-.. code-block:: bash
-
-   git clone https://github.com/cloudQuant/pymt5.git
-   cd pymt5
-   pip install -e .
-
-Indices and Tables
-------------------
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+- `GitHub repository <https://github.com/cloudQuant/pymt5>`_
+- `Issue tracker <https://github.com/cloudQuant/pymt5/issues>`_
+- :ref:`genindex`
+- :ref:`search`

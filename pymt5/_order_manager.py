@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import enum
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from pymt5._logging import get_logger
+from pymt5.constants import (
+    TRADE_RETCODE_CANCEL,
+    TRADE_RETCODE_DONE,
+    TRADE_RETCODE_DONE_PARTIAL,
+    TRADE_RETCODE_PLACED,
+    TRADE_RETCODE_REJECT,
+)
 from pymt5.types import Record
 
 logger = get_logger("pymt5.order_manager")
@@ -54,14 +62,15 @@ class PositionSummary:
 
 
 class OrderManager:
-    """Tracks order lifecycle and aggregates position data.
+    """Track order lifecycle state in an in-memory registry.
 
-    This manager maintains an in-memory registry of orders and their
-    state transitions.  It can be fed data from trade results and push
-    notifications to keep the local state up to date.
+    The manager can be fed data from trade results and push notifications to
+    keep tracked orders up to date. It does not populate position summaries;
+    use :meth:`MT5WebClient.get_positions` for authoritative positions.
     """
 
     def __init__(self) -> None:
+        """Initialize empty order and position registries."""
         self._orders: dict[int, TrackedOrder] = {}
         self._positions: dict[str, PositionSummary] = {}
         self._state_change_callbacks: list[Callable[[TrackedOrder, OrderState], Any]] = []
@@ -116,19 +125,19 @@ class OrderManager:
         old_state = order.state
 
         # Map retcode to state
-        if retcode == 10009:  # TRADE_RETCODE_DONE
+        if retcode == TRADE_RETCODE_DONE:
             order.state = OrderState.FILLED
             order.filled_volume = order.volume
-        elif retcode == 10010:  # TRADE_RETCODE_DONE_PARTIAL
+        elif retcode == TRADE_RETCODE_DONE_PARTIAL:
             order.state = OrderState.PARTIALLY_FILLED
             filled = trade_result.get("volume", 0)
             if filled:
                 order.filled_volume = float(filled)
-        elif retcode == 10006:  # TRADE_RETCODE_REJECT
+        elif retcode == TRADE_RETCODE_REJECT:
             order.state = OrderState.REJECTED
-        elif retcode == 10007:  # TRADE_RETCODE_CANCEL
+        elif retcode == TRADE_RETCODE_CANCEL:
             order.state = OrderState.CANCELED
-        elif retcode == 10008:  # TRADE_RETCODE_PLACED
+        elif retcode == TRADE_RETCODE_PLACED:
             order.state = OrderState.PENDING
 
         if "price" in trade_result and trade_result["price"]:
@@ -195,11 +204,37 @@ class OrderManager:
         return [o for o in self._orders.values() if o.state == state]
 
     def get_position(self, symbol: str) -> PositionSummary | None:
-        """Return the position summary for *symbol*, or ``None``."""
+        """Return a local position summary for *symbol*, or ``None``.
+
+        .. deprecated:: 1.0.5
+           This local summary is never populated by :class:`OrderManager` and
+           will be removed in 2.0.0. Use :meth:`MT5WebClient.get_positions` for
+           authoritative positions.
+        """
+        warnings.warn(
+            "OrderManager.get_position() returns a local summary that is never populated; "
+            "it is deprecated since 1.0.5 and will be removed in 2.0.0. "
+            "Use MT5WebClient.get_positions() for authoritative positions.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._positions.get(symbol)
 
     def get_positions(self) -> list[PositionSummary]:
-        """Return all position summaries."""
+        """Return all local position summaries.
+
+        .. deprecated:: 1.0.5
+           These local summaries are never populated by :class:`OrderManager`
+           and will be removed in 2.0.0. Use :meth:`MT5WebClient.get_positions`
+           for authoritative positions.
+        """
+        warnings.warn(
+            "OrderManager.get_positions() returns local summaries that are never populated; "
+            "they are deprecated since 1.0.5 and will be removed in 2.0.0. "
+            "Use MT5WebClient.get_positions() for authoritative positions.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return list(self._positions.values())
 
     # -- Callbacks --

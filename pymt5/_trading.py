@@ -127,6 +127,13 @@ class _TradingMixin:
         def _volume_to_lots(volume: float, precision: int = 8) -> int: ...
 
     async def get_positions_and_orders(self) -> dict[str, RecordList]:
+        """Fetch the current open positions and pending orders.
+
+        Returns:
+            A dictionary with ``positions`` and ``orders`` keys. Each value is
+            a list of decoded trade records.
+
+        """
         result = await self.transport.send_command(CMD_GET_POSITIONS_ORDERS)
         body = result.body
         positions = _parse_counted_records(body, POSITION_SCHEMA, POSITION_FIELD_NAMES)
@@ -137,6 +144,19 @@ class _TradingMixin:
         return {"positions": positions, "orders": orders}
 
     async def get_trade_history(self, from_ts: int = 0, to_ts: int = 0) -> dict[str, RecordList]:
+        """Fetch historical deals and orders for a timestamp range.
+
+        Args:
+            from_ts: Range start as a Unix timestamp in seconds, or ``0`` to
+                use the server's default boundary.
+            to_ts: Range end as a Unix timestamp in seconds, or ``0`` to leave
+                the boundary unspecified.
+
+        Returns:
+            A dictionary with ``deals`` and ``orders`` keys. Deal creation and
+            update timestamps are normalized to milliseconds.
+
+        """
         payload = struct.pack("<ii", from_ts, to_ts)
         result = await self.transport.send_command(CMD_GET_TRADE_HISTORY, payload)
         body = result.body
@@ -395,6 +415,47 @@ class _TradingMixin:
         position_by: int = 0,
         time_expiration: int = 0,
     ) -> TradeResult:
+        """Serialize and submit a low-level trade request.
+
+        This method exposes the Web Terminal trade fields directly. Most callers
+        should prefer the higher-level order helpers, which handle symbol metadata
+        and volume conversion. If a sent request times out or is cancelled, its
+        server-side result is unknown; reconcile orders, deals, and positions
+        before retrying.
+
+        Args:
+            action_id: Caller-defined request identifier.
+            trade_action: Numeric trade action, such as market execution, pending
+                order placement, modification, removal, or position close-by.
+            symbol: Symbol name, truncated to 32 characters for the wire format.
+            volume: Volume in MT5 integer units (lots multiplied by 10,000).
+            digits: Number of decimal digits used for the symbol's prices.
+            order: Pending-order ticket used by modification and removal actions.
+            trade_type: Numeric order type.
+            type_filling: Numeric order filling mode.
+            type_time: Numeric order expiration type.
+            type_flags: Numeric order flags.
+            type_reason: Numeric reason code for the order.
+            price_order: Requested order price. Must be positive for pending orders.
+            price_trigger: Trigger price for applicable stop or stop-limit orders.
+            price_sl: Stop-loss price, or ``0.0`` when not set.
+            price_tp: Take-profit price, or ``0.0`` when not set.
+            deviation: Maximum allowed price deviation in server-defined units.
+            comment: Order comment, truncated to 32 characters for the wire format.
+            position_id: Position ticket used by position-related actions.
+            position_by: Opposite position ticket used by close-by actions.
+            time_expiration: Expiration timestamp for applicable pending orders.
+
+        Returns:
+            The parsed trade response, including its return code and any order,
+            deal, or position identifiers supplied by the server.
+
+        Raises:
+            ValidationError: If required volume, price, order ticket, or position
+                ticket fields are invalid for the selected trade action, or if a
+                stop-loss or take-profit price is negative.
+
+        """
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING) and volume <= 0:
             raise ValidationError(f"volume must be > 0 for trade_action={trade_action}, got {volume}")
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL) and price_order <= 0.0:
@@ -446,7 +507,20 @@ class _TradingMixin:
         return self._parse_trade_response(result.body, symbol, trade_action, volume)
 
     async def order_send(self, request: Record) -> TradeResult:
-        """Official-style order_send() wrapper over cmd=12 trade_request."""
+        """Submit a MetaTrader5-style request through the low-level trade API.
+
+        Args:
+            request: Mapping containing standard order fields such as ``action``,
+                ``symbol``, ``type``, ``volume``, ``price``, and optional stop,
+                filling, expiration, and comment fields.
+
+        Returns:
+            The parsed trade response.
+
+        Raises:
+            ValidationError: If the translated request fails trade-field validation.
+
+        """
         symbol = str(request.get("symbol", "") or "")
         order_type = int(request.get("type", 0) or 0)
         price = float(request.get("price", 0.0) or 0.0)

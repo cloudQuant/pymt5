@@ -66,6 +66,8 @@ if TYPE_CHECKING:
     from pymt5.transport import MT5WebSocketTransport
 
 _T = TypeVar("_T")
+_UNKNOWN_SYMBOL_TTL = 5.0
+_UNKNOWN_SYMBOL_CACHE_LIMIT = 1024
 
 logger = get_logger("pymt5.client")
 
@@ -83,6 +85,7 @@ class _MarketDataMixin(_CurrencyMixin):
     _symbols: dict[str, SymbolInfo]
     _symbols_by_id: dict[int, SymbolInfo]
     _full_symbols: dict[str, Record]
+    _full_symbols_loaded_at: dict[str, float]
     _tick_cache_by_id: dict[int, Record]
     _tick_cache_by_name: dict[str, Record]
     _tick_history_limit: int
@@ -91,9 +94,11 @@ class _MarketDataMixin(_CurrencyMixin):
     _book_cache_by_id: dict[int, Record]
     _book_cache_by_name: dict[str, Record]
     _subscribed_ids: list[int]
+    _tick_subscription_lock: asyncio.Lock
     _subscribed_book_ids: list[int]
     _symbol_cache_ttl: float
     _symbols_loaded_at: float
+    _unknown_symbol_misses: dict[str, float]
 
     if TYPE_CHECKING:
 
@@ -103,19 +108,23 @@ class _MarketDataMixin(_CurrencyMixin):
     def _is_symbol_cache_valid(self) -> bool:
         """Check whether the symbol cache is still valid.
 
-        Returns ``True`` if the TTL is disabled (0) or if the cache has not
-        yet expired.
+        Returns ``False`` until the first load. A TTL of 0 preserves the
+        legacy behavior of always reloading; a positive TTL enables reuse.
         """
-        if self._symbol_cache_ttl <= 0:
+        loaded_at = getattr(self, "_symbols_loaded_at", 0.0)
+        if loaded_at <= 0:
             return False
-        if self._symbols_loaded_at <= 0:
+        ttl = getattr(self, "_symbol_cache_ttl", 0.0)
+        if ttl <= 0:
             return False
-        elapsed = time.monotonic() - self._symbols_loaded_at
-        return elapsed < self._symbol_cache_ttl
+        return time.monotonic() - loaded_at < ttl
 
     def invalidate_symbol_cache(self) -> None:
         """Force the symbol cache to be reloaded on the next ``load_symbols()`` call."""
         self._symbols_loaded_at = 0.0
+        unknown_symbols = getattr(self, "_unknown_symbol_misses", None)
+        if unknown_symbols is not None:
+            unknown_symbols.clear()
 
     async def load_symbols(self, use_gzip: bool = True) -> dict[str, SymbolInfo]:
         """Load symbols and build internal cache for name->id lookup.
@@ -131,6 +140,9 @@ class _MarketDataMixin(_CurrencyMixin):
         self._symbols.clear()
         self._symbols_by_id.clear()
         self._full_symbols.clear()
+        full_symbol_times = getattr(self, "_full_symbols_loaded_at", None)
+        if full_symbol_times is not None:
+            full_symbol_times.clear()
         for s in raw:
             info = SymbolInfo(
                 name=s["trade_symbol"],
@@ -167,20 +179,68 @@ class _MarketDataMixin(_CurrencyMixin):
 
     async def _resolve_symbol_id(self, symbol: str) -> int | None:
         info = self._symbols.get(symbol)
-        if info is None:
-            await self.load_symbols()
-            info = self._symbols.get(symbol)
-        return info.symbol_id if info is not None else None
+        unknown_symbols = getattr(self, "_unknown_symbol_misses", None)
+        if info is not None:
+            if unknown_symbols is not None:
+                unknown_symbols.pop(symbol, None)
+            return info.symbol_id
+
+        if unknown_symbols is None:
+            unknown_symbols = {}
+            self._unknown_symbol_misses = unknown_symbols
+        now = time.monotonic()
+        missed_at = unknown_symbols.get(symbol)
+        if missed_at is not None:
+            if now - missed_at < _UNKNOWN_SYMBOL_TTL:
+                return None
+            unknown_symbols.pop(symbol, None)
+            # A negative entry expiring must trigger a fresh server snapshot,
+            # even when the positive full-symbol cache has a longer/no TTL.
+            self._symbols_loaded_at = 0.0
+
+        await self.load_symbols()
+        info = self._symbols.get(symbol)
+        if info is not None:
+            unknown_symbols.pop(symbol, None)
+            return info.symbol_id
+
+        now = time.monotonic()
+        expired = [name for name, timestamp in unknown_symbols.items() if now - timestamp >= _UNKNOWN_SYMBOL_TTL]
+        for name in expired:
+            unknown_symbols.pop(name, None)
+        if len(unknown_symbols) >= _UNKNOWN_SYMBOL_CACHE_LIMIT:
+            oldest = min(unknown_symbols, key=unknown_symbols.__getitem__)
+            unknown_symbols.pop(oldest, None)
+        unknown_symbols[symbol] = now
+        return None
 
     async def get_symbols(self, use_gzip: bool = True) -> RecordList:
+        """Fetch and decode the server's basic symbol list.
+
+        Args:
+            use_gzip: Whether to request the compressed symbol-list response.
+                If ``False``, use the uncompressed command instead.
+
+        Returns:
+            A list of decoded symbol records.
+
+        Raises:
+            ProtocolError: If either symbol-list command returns a nonzero
+                response code.
+
+        """
         if use_gzip:
             result = await self.transport.send_command(CMD_GET_SYMBOLS_GZIP)
+            if result.code != 0:
+                raise ProtocolError(f"symbol list command {CMD_GET_SYMBOLS_GZIP} failed: code={result.code}")
             if result.body and len(result.body) > 4:
                 compressed = bytes(result.body[4:])
                 raw = await asyncio.to_thread(zlib.decompress, compressed)
                 return _parse_counted_records(raw, SYMBOL_BASIC_SCHEMA, SYMBOL_BASIC_FIELD_NAMES)
             return []
         result = await self.transport.send_command(CMD_GET_SYMBOLS)
+        if result.code != 0:
+            raise ProtocolError(f"symbol list command {CMD_GET_SYMBOLS} failed: code={result.code}")
         return _parse_counted_records(result.body, SYMBOL_BASIC_SCHEMA, SYMBOL_BASIC_FIELD_NAMES)
 
     async def symbols_total(self, use_gzip: bool = True) -> int:
@@ -196,47 +256,86 @@ class _MarketDataMixin(_CurrencyMixin):
             return symbols
         return [item for item in symbols if _matches_group_mask(item.get("trade_symbol", ""), group)]
 
+    def _cache_full_symbol(self, symbol: str, info: Record) -> Record:
+        """Store full symbol metadata with its monotonic fetch timestamp."""
+        self._full_symbols[symbol] = info
+        timestamps = getattr(self, "_full_symbols_loaded_at", None)
+        if timestamps is None:
+            timestamps = {}
+            self._full_symbols_loaded_at = timestamps
+        timestamps[symbol] = time.monotonic()
+        return dict(info)
+
     async def get_full_symbol_info(self, symbol: str) -> Record | None:
-        """Get detailed symbol specification (cmd=18): contract_size, tick_size, tick_value,
-        volume_min/max/step, margin_initial/maintenance, spread, currencies, etc.
+        """Get a detailed symbol specification.
+
+        The response includes contract size, tick size and value, volume limits,
+        margin settings, spread, currencies, and related symbol properties.
 
         Args:
-            symbol: Symbol name, e.g. "EURUSD"
+            symbol: Symbol name, for example ``"EURUSD"``.
 
         Returns:
-            Dict with full symbol properties, or None if symbol not found.
+            A dictionary of full symbol properties, or ``None`` if the symbol is
+            not found.
+
+        Raises:
+            ProtocolError: If the server rejects the request or returns an
+                invalid or mismatched full-symbol response.
+
         """
         validate_symbol_name(symbol)
-        payload = SeriesCodec.serialize(
-            [
-                (PROP_FIXED_STRING, symbol[:32], 64),
-            ]
-        )
-        try:
-            result = await self.transport.send_command(CMD_GET_FULL_SYMBOLS, payload)
-            if not result.body:
-                return None
-            records = _parse_counted_records(result.body, FULL_SYMBOL_SCHEMA, FULL_SYMBOL_FIELD_NAMES)
-            if records:
-                info = _normalize_full_symbol_record(records[0])
-                self._full_symbols[symbol] = info
-                return dict(info)
-            full_sym_size = get_series_size(FULL_SYMBOL_SCHEMA)
-            if len(result.body) >= full_sym_size:
-                vals = SeriesCodec.parse(result.body, FULL_SYMBOL_SCHEMA)
-                info = _normalize_full_symbol_record(dict(zip(FULL_SYMBOL_FIELD_NAMES, vals)))
-                self._full_symbols[symbol] = info
-                return dict(info)
-            return None
-        except (struct.error, KeyError, ValueError, TypeError, IndexError) as exc:
-            logger.warning("get_full_symbol_info(%s) failed: %s", symbol, exc)
+        symbol_id = await self._resolve_symbol_id(symbol)
+        if symbol_id is None:
             return None
 
+        payload = struct.pack("<II", 1, symbol_id)
+        result = await self.transport.send_command(CMD_GET_FULL_SYMBOLS, payload)
+        if result.code != 0:
+            raise ProtocolError(f"full symbol command {CMD_GET_FULL_SYMBOLS} failed: code={result.code}")
+
+        body = result.body
+        if len(body) < 4:
+            raise ProtocolError("full symbol response is missing its count")
+        count = struct.unpack_from("<I", body)[0]
+        if count == 0 and len(body) == 4:
+            return None
+        record_size = get_series_size(FULL_SYMBOL_SCHEMA)
+        if count != 1 or len(body) != 4 + record_size:
+            raise ProtocolError(f"invalid full symbol response: count={count}, length={len(body)}")
+
+        try:
+            vals = SeriesCodec.parse_at(body, FULL_SYMBOL_SCHEMA, 4)
+            info = _normalize_full_symbol_record(dict(zip(FULL_SYMBOL_FIELD_NAMES, vals)))
+        except (struct.error, KeyError, ValueError, TypeError, IndexError) as exc:
+            raise ProtocolError("invalid full symbol response record") from exc
+        if info.get("trade_symbol") != symbol or info.get("symbol_id") != symbol_id:
+            raise ProtocolError("full symbol response does not match the requested symbol")
+        current_symbol = self._symbols.get(symbol)
+        if current_symbol is None or current_symbol.symbol_id != symbol_id:
+            raise ProtocolError("symbol mapping changed during full symbol request")
+        return self._cache_full_symbol(symbol, info)
+
     async def symbol_info(self, symbol: str) -> Record | None:
-        """Official-style symbol_info() wrapper backed by cmd=18."""
+        """Return detailed symbol metadata using the cache when it is fresh.
+
+        Args:
+            symbol: Symbol name to retrieve.
+
+        Returns:
+            A copy of the cached or newly fetched symbol record, or ``None`` if
+            the symbol is not found.
+
+        """
         cached = self._full_symbols.get(symbol)
         if cached is not None:
-            return dict(cached)
+            ttl = getattr(self, "_symbol_cache_ttl", 0.0)
+            timestamps = getattr(self, "_full_symbols_loaded_at", {})
+            cached_at = timestamps.get(symbol, 0.0)
+            if ttl <= 0 or time.monotonic() - cached_at < ttl:
+                return dict(cached)
+            self._full_symbols.pop(symbol, None)
+            timestamps.pop(symbol, None)
         info = await self.get_full_symbol_info(symbol)
         if info is not None:
             return dict(info)
@@ -303,6 +402,7 @@ class _MarketDataMixin(_CurrencyMixin):
 
         Returns:
             List of spread dicts with keys: spread_id, flags, trade_symbol, param1, param2, spread_value.
+
         """
         if symbol_ids:
             payload = struct.pack(f"<{len(symbol_ids) + 1}I", len(symbol_ids), *symbol_ids)
@@ -312,38 +412,43 @@ class _MarketDataMixin(_CurrencyMixin):
         return _parse_counted_records(result.body, SPREAD_SCHEMA, SPREAD_FIELD_NAMES)
 
     async def subscribe_ticks(self, symbol_ids: list[int]) -> None:
-        """Subscribe to tick updates for given symbol IDs."""
+        """Subscribe to tick updates, retaining the last confirmed set on failure.
+
+        After a timeout or cancellation, that set is not proof of server state.
+        """
         if not symbol_ids:
             logger.debug("subscribe_ticks called with empty list, skipping")
             return
-        # Accumulate rather than replace -- MT5 subscribe replaces server-side,
-        # so we must always send the full set of desired subscriptions.
-        existing = set(getattr(self, "_subscribed_ids", None) or [])
-        merged = sorted(existing | set(symbol_ids))
-        payload = struct.pack(f"<{len(merged) + 1}I", len(merged), *merged)
-        await self.transport.send_command(CMD_SUBSCRIBE_TICKS, payload)
-        self._subscribed_ids = merged
-        logger.info(
-            "subscribed to %d symbol ids for ticks (added %d new)", len(merged), len(set(symbol_ids) - existing)
-        )
+        async with self._tick_subscription_lock:
+            # The server replaces its set, so send the full desired set.
+            existing = set(self._subscribed_ids)
+            merged = sorted(existing | set(symbol_ids))
+            payload = struct.pack(f"<{len(merged) + 1}I", len(merged), *merged)
+            result = await self.transport.send_command(CMD_SUBSCRIBE_TICKS, payload)
+            if result.code != 0:
+                raise ProtocolError(f"tick subscription command {CMD_SUBSCRIBE_TICKS} failed: code={result.code}")
+            self._subscribed_ids = merged
+            logger.info(
+                "subscribed to %d symbol ids for ticks (added %d new)", len(merged), len(set(symbol_ids) - existing)
+            )
 
     async def unsubscribe_ticks(self, symbol_ids: list[int]) -> None:
         """Remove specific symbol IDs from tick subscriptions.
 
-        If the resulting subscription set is empty, sends an empty subscription
-        to the server to stop all tick pushes.
+        If the resulting subscription set is empty, requests an empty subscription.
+        A rejected request retains the last confirmed set for a subsequent retry.
         """
-        existing = set(self._subscribed_ids)
-        to_remove = set(symbol_ids)
-        remaining = sorted(existing - to_remove)
-        if remaining:
+        async with self._tick_subscription_lock:
+            existing = set(self._subscribed_ids)
+            remaining = sorted(existing - set(symbol_ids))
             payload = struct.pack(f"<{len(remaining) + 1}I", len(remaining), *remaining)
-        else:
-            payload = struct.pack("<I", 0)
-        await self.transport.send_command(CMD_SUBSCRIBE_TICKS, payload)
-        removed_count = len(existing) - len(remaining)
-        self._subscribed_ids = remaining
-        logger.info("unsubscribed %d symbol ids from ticks (%d remaining)", removed_count, len(remaining))
+            result = await self.transport.send_command(CMD_SUBSCRIBE_TICKS, payload)
+            if result.code != 0:
+                raise ProtocolError(f"tick unsubscription command {CMD_SUBSCRIBE_TICKS} failed: code={result.code}")
+            self._subscribed_ids = remaining
+            logger.info(
+                "unsubscribed %d symbol ids from ticks (%d remaining)", len(existing) - len(remaining), len(remaining)
+            )
 
     async def subscribe_symbols(self, symbol_names: list[str]) -> list[int]:
         """Subscribe to tick updates by symbol name (requires load_symbols first).
@@ -499,10 +604,12 @@ class _MarketDataMixin(_CurrencyMixin):
         Returns:
             List of bar dicts with time, open, high, low, close, tick_volume,
             and spread; extended bars also include real_volume.
+
         """
         selected_format = self._rate_bar_format if bar_format is None else bar_format
         _validate_rate_bar_format(selected_format)
         mapped = PERIOD_MAP.get(period_minutes, period_minutes)
+        # Wire timestamps are signed i32 seconds, so dates beyond 2038 cannot be represented.
         payload = SeriesCodec.serialize(
             [
                 (PROP_FIXED_STRING, symbol[:32], 64),
@@ -519,6 +626,7 @@ class _MarketDataMixin(_CurrencyMixin):
     async def get_rates_raw(self, symbol: str, period_minutes: int, from_ts: int, to_ts: int) -> bytes:
         """Get raw rate bytes (for debugging)."""
         mapped = PERIOD_MAP.get(period_minutes, period_minutes)
+        # Wire timestamps are signed i32 seconds, so dates beyond 2038 cannot be represented.
         payload = SeriesCodec.serialize(
             [
                 (PROP_FIXED_STRING, symbol[:32], 64),
@@ -569,7 +677,10 @@ class _MarketDataMixin(_CurrencyMixin):
         end_ts = _coerce_timestamp(date_from)
         lookback = _history_lookback_seconds(period_minutes, count)
         bars = await self.get_rates(
-            symbol, period_minutes, max(0, end_ts - lookback), end_ts,
+            symbol,
+            period_minutes,
+            max(0, end_ts - lookback),
+            end_ts,
             **({} if bar_format is None else {"bar_format": bar_format}),
         )
         return bars[-count:]
@@ -594,7 +705,10 @@ class _MarketDataMixin(_CurrencyMixin):
         end_ts = int(datetime.now().timestamp())
         lookback = _history_lookback_seconds(period_minutes, start_pos + count)
         bars = await self.get_rates(
-            symbol, period_minutes, max(0, end_ts - lookback), end_ts,
+            symbol,
+            period_minutes,
+            max(0, end_ts - lookback),
+            end_ts,
             **({} if bar_format is None else {"bar_format": bar_format}),
         )
         if not bars:

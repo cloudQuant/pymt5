@@ -1,9 +1,17 @@
+"""High-level asynchronous client for the MetaTrader 5 Web Terminal.
+
+This module combines encrypted WebSocket transport, session management, account
+and market-data operations, trading helpers, and push-notification handling.
+:class:`MT5WebClient` supports asynchronous context management and optional
+reconnection after unexpected disconnects.
+"""
+
 import asyncio
 import os
 import random
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
 # Import mixins
@@ -56,6 +64,8 @@ from pymt5.constants import (
     PROP_U32,
     PROP_U64,
 )
+from pymt5.constants import MT5_TERMINAL_VERSION as MT5_TERMINAL_VERSION
+from pymt5.constants import OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES as OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES
 from pymt5.events import HealthStatus
 from pymt5.exceptions import AuthenticationError, PyMT5Error, SessionError, ValidationError
 from pymt5.helpers import build_client_id, bytes_to_hex
@@ -79,6 +89,7 @@ from pymt5.types import (  # noqa: F401  — re-exported for backward compatibil
     Record,
     RecordList,
     SymbolInfo,
+    TickPriceMode,
     TradeResult,
     VerificationStatus,
 )
@@ -86,13 +97,23 @@ from pymt5.types import (  # noqa: F401  — re-exported for backward compatibil
 logger = get_logger("pymt5.client")
 
 _T = TypeVar("_T")
-MT5_TERMINAL_VERSION = 500
-OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES = {
-    5687: "15 Mar 2026",
-}
 
 
 class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _TradingMixin, _OrderHelpersMixin):
+    """Provide an asynchronous MetaTrader 5 Web Terminal client.
+
+    The client owns its transport, authentication state, heartbeat, caches, and
+    push subscriptions. Using it as an asynchronous context manager connects on
+    entry and closes on exit; authentication still requires an explicit call to
+    :meth:`login`.
+
+    If automatic reconnection is enabled, an unexpected disconnect after a
+    successful login triggers exponential backoff with jitter, reauthentication,
+    and restoration of tick and order-book subscriptions. Pending commands are
+    not replayed. Calling :meth:`close` cancels reconnection, clears stored
+    credentials, and prevents new sessions until cleanup is quiescent.
+    """
+
     def __init__(
         self,
         uri: str = DEFAULT_WS_URI,
@@ -110,9 +131,62 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         symbol_cache_ttl: float = 0,
         trade_protocol: str = "legacy",
         rate_bar_format: str = "auto",
+        tick_price_mode: TickPriceMode = "auto",
+        tick_price_modes: Mapping[str, TickPriceMode] | None = None,
     ):
+        """Initialize a client without opening a network connection.
+
+        Args:
+            uri: MetaTrader 5 Web Terminal WebSocket URI.
+            timeout: Default timeout in seconds for transport operations and
+                shutdown coordination.
+            heartbeat_interval: Seconds between heartbeat pings after login.
+            tick_history_limit: Maximum ticks retained per symbol. Zero means
+                no per-symbol history limit.
+            max_tick_symbols: Maximum symbols with retained tick histories.
+                Zero means unlimited; otherwise the least recently updated
+                symbol's history is evicted first.
+            auto_reconnect: Whether to reconnect and authenticate again after
+                an unexpected disconnect.
+            max_reconnect_attempts: Maximum attempts made per reconnection loop.
+            reconnect_delay: Base delay in seconds for exponential backoff and
+                the upper bound of its random jitter.
+            max_reconnect_delay: Maximum delay in seconds between attempts.
+            rate_limit: Sustained command rate per second. Zero disables
+                command throttling.
+            rate_burst: Maximum token-bucket burst size for command throttling.
+            metrics: Optional collector for connection, command, and reconnect
+                metrics.
+            symbol_cache_ttl: Seconds for which ``load_symbols()`` may reuse its
+                cache. Zero preserves the behavior of reloading on every call.
+            trade_protocol: Trade request layout, either ``"legacy"`` or
+                ``"build_6090"``.
+            rate_bar_format: Bar parser mode: ``"auto"``, ``"standard"``, or
+                ``"extended"``.
+            tick_price_mode: Default tick price interpretation: ``"auto"``,
+                ``"scaled"``, or ``"normalized"``.
+            tick_price_modes: Optional per-symbol tick price mode overrides.
+                Symbol keys are stripped and normalized to uppercase.
+
+        Raises:
+            ValueError: If the trade protocol, a tick price mode, or a tick
+                price override is invalid.
+            ValidationError: If ``rate_bar_format`` is invalid.
+
+        """
         if trade_protocol not in ("legacy", "build_6090"):
             raise ValueError("trade_protocol must be 'legacy' or 'build_6090'")
+        if tick_price_mode not in ("auto", "scaled", "normalized"):
+            raise ValueError("tick_price_mode must be 'auto', 'scaled', or 'normalized'")
+        self._tick_price_mode = tick_price_mode
+        self._tick_price_modes: dict[str, TickPriceMode] = {}
+        for symbol, mode in (tick_price_modes or {}).items():
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ValueError("tick_price_modes keys must be non-empty symbol names")
+            if mode not in ("auto", "scaled", "normalized"):
+                raise ValueError(f"invalid tick price mode for {symbol!r}: {mode!r}")
+            self._tick_price_modes[symbol.strip().upper()] = mode
+        self._tick_price_warning_keys: set[tuple[str, str]] = set()
         _validate_rate_bar_format(rate_bar_format)
         self._trade_protocol = trade_protocol
         self._rate_bar_format = rate_bar_format
@@ -133,8 +207,10 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         self._symbols: dict[str, SymbolInfo] = {}
         self._symbols_by_id: dict[int, SymbolInfo] = {}
         self._full_symbols: dict[str, Record] = {}
+        self._full_symbols_loaded_at: dict[str, float] = {}
         self._symbol_cache_ttl: float = max(0.0, float(symbol_cache_ttl))
         self._symbols_loaded_at: float = 0.0
+        self._unknown_symbol_misses: dict[str, float] = {}
         self._tick_cache_by_id: dict[int, Record] = {}
         self._tick_cache_by_name: dict[str, Record] = {}
         self._tick_history_limit = max(0, int(tick_history_limit))
@@ -147,6 +223,10 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         self._last_error: tuple[int, str] = (0, "")
         self._logged_in = False
         self._session_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
+        self._session_generation = 0
+        self._unfinished_close_task: asyncio.Task[None] | None = None
+        self._reconnect_close_tasks: set[asyncio.Task[None]] = set()
         self._bootstrap_pristine = False
         # Reconnect settings
         self._auto_reconnect = auto_reconnect
@@ -158,6 +238,7 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         # Stored credentials for reconnect
         self._login_kwargs: dict | None = None
         self._subscribed_ids: list[int] = []
+        self._tick_subscription_lock = asyncio.Lock()
         self._subscribed_book_ids: list[int] = []
         # User disconnect callback
         self._on_disconnect: Callable[[], None] | None = None
@@ -180,6 +261,13 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
 
     @property
     def is_connected(self) -> bool:
+        """Whether the transport is ready and the client is authenticated.
+
+        Returns:
+            ``True`` only when the encrypted transport is ready and login has
+            completed successfully; otherwise ``False``.
+
+        """
         return self.transport.is_ready and self._logged_in
 
     @property
@@ -192,7 +280,35 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         self._on_disconnect = callback
 
     async def connect(self) -> "MT5WebClient":
-        await self.transport.connect()
+        """Open the WebSocket and complete the encrypted bootstrap exchange.
+
+        Connecting does not authenticate the account. Call :meth:`login` after
+        this method succeeds. A concurrent close invalidates the attempt rather
+        than allowing it to establish a replacement session.
+
+        Returns:
+            This client instance, ready for session initialization or login.
+
+        Raises:
+            SessionError: If the client is already logged in, cleanup from a
+                previous session is still running, or close invalidates the
+                connection attempt.
+            MT5ConnectionError: If the bootstrap exchange fails or returns a
+                malformed response.
+            TimeoutError: If opening the socket or exchanging bootstrap data
+                exceeds the configured timeout.
+            asyncio.CancelledError: If the caller cancels the attempt. Partial
+                transport resources are still cleaned up.
+
+        """
+        self._assert_close_quiescent()
+        generation = self._session_generation
+        transport = self.transport
+        if self._logged_in:
+            raise SessionError("already logged in; call logout() before reconnecting")
+        await transport.connect()
+        if generation != self._session_generation or transport is not self.transport or self._closing:
+            raise SessionError("connection invalidated by close")
         self._bootstrap_pristine = True
         self._connected_at = time.monotonic()
         if self.transport.server_build:
@@ -215,41 +331,150 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         return await self.init_session(version=version, password=password, otp=otp, cid=cid)
 
     async def close(self) -> None:
-        self._closing = True
-        self._stop_heartbeat()
-        if self._reconnect_task is not None and self._reconnect_task is not asyncio.current_task():
-            reconnect_task = self._reconnect_task
-            reconnect_task.cancel()
-            try:
-                await reconnect_task
-            except asyncio.CancelledError:
-                current_task = asyncio.current_task()
-                if current_task is not None and current_task.cancelling():
-                    raise
-            except Exception:
-                logger.warning("reconnect task failed during close", exc_info=True)
-            self._reconnect_task = None
-        async with self._session_lock:
-            if self._logged_in:
+        """Log out if necessary and close the client session.
+
+        Heartbeat and reconnection work are stopped, the transport is closed,
+        and local login state and stored credentials are cleared. Cleanup is
+        coordinated with in-flight login and logout operations and is bounded
+        by the configured timeout plus a short cancellation grace period.
+        Non-cooperative cleanup may continue in a detached task after that
+        deadline, while new sessions remain protected by generation checks.
+
+        The first cleanup error is re-raised after best-effort cleanup. Caller
+        cancellation is preserved, and authentication state is reset even when
+        logout or transport closure fails.
+
+        Returns:
+            None.
+
+        Raises:
+            SessionError: If another close or incompatible reconnect cleanup is
+                still preventing a new close from starting.
+            TimeoutError: If session cleanup exceeds its configured deadline.
+            asyncio.CancelledError: If caller cancellation is the first error
+                recorded during shutdown.
+            Exception: If logout, receive-task cleanup, or transport closure
+                fails; the first such error is propagated.
+
+        """
+        async with self._close_lock:
+            self._assert_close_quiescent(allow_reconnect_cleanup=True)
+            self._session_generation += 1
+            self._closing = True
+            errors: list[BaseException] = []
+            phase = "reconnect"
+            owner_task = asyncio.current_task()
+
+            def record(exc: BaseException) -> None:
+                if not errors:
+                    errors.append(exc)
+
+            async def cleanup() -> None:
+                nonlocal phase
                 try:
-                    await self._logout_unlocked()
-                except Exception:
-                    logger.debug("logout during close() failed", exc_info=True)
+                    self._stop_heartbeat()
+                    reconnect_task = self._reconnect_task
+                    self._reconnect_task = None
+                    if reconnect_task is not None and reconnect_task is not owner_task:
+                        reconnect_task.cancel()
+                        try:
+                            await reconnect_task
+                        except asyncio.CancelledError as exc:
+                            current = asyncio.current_task()
+                            if current is not None and current.cancelling():
+                                record(exc)
+                        except BaseException as exc:
+                            record(exc)
+                    phase = "session_lock"
+                    await self._session_lock.acquire()
+                    try:
+                        if self._logged_in:
+                            phase = "logout"
+                            try:
+                                await self._logout_unlocked()
+                            except BaseException as exc:
+                                record(exc)
+                        self._stop_heartbeat()
+                        phase = "transport_close"
+                        try:
+                            await self.transport.close()
+                        except BaseException as exc:
+                            record(exc)
+                    finally:
+                        self._session_lock.release()
+                except BaseException as exc:
+                    record(exc)
+                    # Even an interrupted session-lock wait must try to stop transport.
+                    phase = "transport_close"
+                    try:
+                        await self.transport.close()
+                    except BaseException as close_exc:
+                        record(close_exc)
+                finally:
+                    self._stop_heartbeat()
+                    self._logged_in = False
+                    self._bootstrap_pristine = False
+                    self._clear_credentials()
+
+            cleanup_task = asyncio.create_task(cleanup())
+            self._unfinished_close_task = cleanup_task
+            deadline = asyncio.get_running_loop().time() + max(self.timeout, 0.01)
+            cancelled_cleanup = False
+            try:
+                while not cleanup_task.done():
+                    try:
+                        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+                        await asyncio.wait_for(asyncio.shield(cleanup_task), timeout=remaining)
+                    except asyncio.CancelledError as exc:
+                        record(exc)
+                        # Preserve an in-flight login's session-lock ordering. Interrupt
+                        # other waits once so cancellation cannot strand shutdown.
+                        if phase != "session_lock" and not cancelled_cleanup and not cleanup_task.done():
+                            cancelled_cleanup = True
+                            cleanup_task.cancel()
+                    except TimeoutError as exc:
+                        record(exc)
+                        cleanup_task.cancel()
+                        grace_deadline = asyncio.get_running_loop().time() + 0.1
+                        while not cleanup_task.done():
+                            try:
+                                remaining = max(0.0, grace_deadline - asyncio.get_running_loop().time())
+                                await asyncio.wait_for(asyncio.shield(cleanup_task), timeout=remaining)
+                            except asyncio.CancelledError as cancel_exc:
+                                record(cancel_exc)
+                            except TimeoutError:
+                                break
+                        if not cleanup_task.done():
+                            cleanup_task.add_done_callback(self._consume_reconnect_close_result)
+                            logger.warning("close cleanup did not stop after cancellation")
+                        break
+                if cleanup_task.done() and not cleanup_task.cancelled():
+                    try:
+                        cleanup_task.result()
+                    except BaseException as exc:
+                        record(exc)
+            finally:
+                self._stop_heartbeat()
                 self._logged_in = False
-            # An in-flight login may have started a heartbeat while close waited
-            # for the session lock, including when its subsequent logout failed.
-            self._stop_heartbeat()
-            await self.transport.close()
-            self._bootstrap_pristine = False
-            self._closing = False
-            # Clear stored credentials from memory
-            self._clear_credentials()
-        logger.info("connection closed")
+                self._bootstrap_pristine = False
+                self._clear_credentials()
+                self._closing = False
+            if errors:
+                raise errors[0]
+            logger.info("connection closed")
+
+    def _assert_close_quiescent(self, *, allow_reconnect_cleanup: bool = False) -> None:
+        """Reject new sessions until the previous close has finished cleanup."""
+        if self._closing or (self._unfinished_close_task is not None and not self._unfinished_close_task.done()):
+            raise SessionError("close cleanup is still in progress")
+        if not allow_reconnect_cleanup and any(not task.done() for task in self._reconnect_close_tasks):
+            raise SessionError("reconnect cleanup is still in progress")
 
     def _clear_credentials(self) -> None:
         """Clear stored credentials from memory for security."""
         if self._login_kwargs is not None:
-            # Zero-fill password before discarding the reference
+            # Replace the stored reference before dropping the kwargs dict.
+            # The original immutable str cannot be wiped in place.
             pw = self._login_kwargs.get("password")
             if isinstance(pw, str) and pw:
                 self._login_kwargs["password"] = "\x00" * len(pw)
@@ -265,10 +490,12 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         return self._last_error
 
     async def __aenter__(self) -> "MT5WebClient":
+        """Connect and return the client for asynchronous context management."""
         await self.connect()
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Close the client when exiting an asynchronous context."""
         await self.close()
 
     # ---- Heartbeat ----
@@ -298,13 +525,18 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
     # ---- Reconnect ----
 
     def _handle_disconnect(self) -> None:
-        """Called by transport when the WebSocket disconnects unexpectedly."""
+        """Handle an unexpected WebSocket disconnect reported by the transport."""
         self._logged_in = False
         self._bootstrap_pristine = False
         self._stop_heartbeat()
         logger.warning("disconnected from server")
         if self._on_disconnect:
-            self._on_disconnect()
+            try:
+                self._on_disconnect()
+            except Exception as exc:
+                # User callback failures must not suppress reconnection. Avoid
+                # logging exception text, which may contain sensitive data.
+                logger.error("disconnect callback failed: %s", type(exc).__name__)
         if self._auto_reconnect and not self._closing and self._login_kwargs:
             if self._reconnect_task is not None and not self._reconnect_task.done():
                 logger.debug("reconnect already in progress, skipping")
@@ -317,7 +549,21 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         Uses exponential backoff with jitter:
         ``min(base_delay * 2^(attempt-1) + random(0, base_delay), max_delay)``
         """
+        generation = self._session_generation
+        owned_transport = self.transport
+
+        def still_current() -> bool:
+            return (
+                generation == self._session_generation
+                and self.transport is owned_transport
+                and not self._closing
+                and (self._unfinished_close_task is None or self._unfinished_close_task.done())
+                and not any(not task.done() for task in self._reconnect_close_tasks)
+            )
+
         for attempt in range(1, self._max_reconnect_attempts + 1):
+            if not still_current():
+                return
             delay = min(
                 self._reconnect_delay * (2 ** (attempt - 1)) + random.uniform(0, self._reconnect_delay),
                 self._max_reconnect_delay,
@@ -327,32 +573,56 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
                 self._metrics.on_reconnect_attempt(attempt)
             try:
                 await asyncio.sleep(delay)
+                if not still_current():
+                    return
                 self._logged_in = False
                 self._stop_heartbeat()
-                # Close old transport to release resources
-                await self._close_reconnect_transport()
-                # Reset transport for fresh connection
-                self.transport = MT5WebSocketTransport(
+                # Close old transport to release resources. Its listener sets
+                # remain intact, so snapshot them afterwards to include any
+                # registrations or removals made while close was in progress.
+                old_transport = owned_transport
+                await self._close_reconnect_transport(old_transport)
+                if not still_current():
+                    return
+                # Reset transport for fresh connection and migrate both internal
+                # and user callbacks. Sets prevent duplicates across retries.
+                new_transport = MT5WebSocketTransport(
                     uri=self.uri,
                     timeout=self.timeout,
                     rate_limit=self._rate_limit,
                     rate_burst=self._rate_burst,
                     metrics=self._metrics,
                 )
-                self.transport._on_disconnect = self._handle_disconnect
-                await self.transport.connect()
+                for command, callbacks in old_transport._listeners.items():
+                    for callback in callbacks:
+                        new_transport.on(command, callback)
+                new_transport._callback_error_handlers.extend(old_transport._callback_error_handlers)
+                new_transport._on_disconnect = self._handle_disconnect
+                if not still_current():
+                    return
+                self.transport = new_transport
+                owned_transport = new_transport
+                await owned_transport.connect()
+                if not still_current():
+                    return
                 # Re-login with stored credentials
                 if self._login_kwargs is None:
                     raise SessionError("cannot reconnect: no stored credentials")
                 kwargs = dict(self._login_kwargs)
                 kwargs["auto_heartbeat"] = True
                 await self.login(**kwargs)
+                if not still_current():
+                    return
                 # Re-subscribe to ticks if we had subscriptions
                 if self._subscribed_ids:
                     await self.subscribe_ticks(self._subscribed_ids)
+                    if not still_current():
+                        return
                 # Re-subscribe to order book if we had subscriptions
                 if self._subscribed_book_ids:
                     await self.subscribe_book(self._subscribed_book_ids)
+                    if not still_current():
+                        return
                 self._reconnect_count += 1
                 self._connected_at = time.monotonic()
                 logger.info("reconnected successfully on attempt %d", attempt)
@@ -360,22 +630,31 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
                     self._metrics.on_reconnect_success(attempt)
                 return
             except (OSError, PyMT5Error) as exc:
+                if not still_current():
+                    return
                 self._logged_in = False
                 self._stop_heartbeat()
-                await self._close_reconnect_transport()
+                await self._close_reconnect_transport(owned_transport)
+                if not still_current():
+                    return
                 logger.warning("reconnect attempt %d failed: %s", attempt, exc)
             except asyncio.CancelledError:
-                self._logged_in = False
-                self._stop_heartbeat()
-                await self._close_reconnect_transport()
+                if still_current():
+                    self._logged_in = False
+                    self._stop_heartbeat()
+                    await self._close_reconnect_transport(owned_transport)
                 raise
         logger.error("all %d reconnect attempts exhausted", self._max_reconnect_attempts)
 
-    async def _close_reconnect_transport(self) -> None:
+    async def _close_reconnect_transport(self, transport: MT5WebSocketTransport | None = None) -> None:
         """Disable command dispatch and callbacks before closing a failed session."""
-        self.transport._on_disconnect = None
-        self.transport.is_ready = False
-        close_task = asyncio.create_task(self.transport.close())
+        if transport is None:
+            transport = self.transport
+        transport._on_disconnect = None
+        transport.is_ready = False
+        close_task = asyncio.create_task(transport.close())
+        self._reconnect_close_tasks.add(close_task)
+        close_task.add_done_callback(self._reconnect_close_tasks.discard)
         deadline = asyncio.get_running_loop().time() + max(0.0, self.timeout)
         cancelled = False
         while True:
@@ -501,6 +780,30 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         otp: str = "",
         cid: bytes | None = None,
     ) -> CommandResult:
+        """Send the MT5 session-initialization command on an open transport.
+
+        Unlike :meth:`initialize`, this method does not connect automatically.
+        The raw result is returned without interpreting its status code.
+
+        Args:
+            version: Terminal protocol version to send, or zero for the default.
+            password: Optional session-initialization password.
+            otp: Optional one-time password.
+            cid: Optional 16-byte client identifier. A client identifier is
+                generated when omitted.
+
+        Returns:
+            The decoded command result, including its server status code and
+            unparsed response body.
+
+        Raises:
+            ValidationError: If ``cid`` is not exactly 16 bytes.
+            SessionError: If the transport is not ready or the connection is
+                invalidated while waiting.
+            MT5TimeoutError: If sending or receiving exceeds the configured
+                command timeout.
+
+        """
         self._bootstrap_pristine = False
         payload = self._build_init_payload(
             version=version,
@@ -525,7 +828,50 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
         utm_source: str = "",
         auto_heartbeat: bool = True,
     ) -> tuple[str, int]:
+        """Authenticate the current transport and start an MT5 session.
+
+        Call :meth:`connect` before logging in. Successful authentication stores
+        the login arguments for optional reconnection; logout and close clear
+        them. Session-changing operations are serialized so that close cannot
+        silently invalidate a successful login.
+
+        Args:
+            login: Numeric MT5 account login.
+            password: Account password used to construct the login payload.
+            url: Optional URL string forwarded in the login payload.
+            session: Session identifier to include, or zero for a new session.
+            otp: Optional one-time password.
+            version: Terminal protocol version to send, or zero for the default.
+            cid: Optional 16-byte client identifier. A client identifier is
+                generated when omitted.
+            lead_cookie_id: Optional lead-cookie identifier for attribution.
+            lead_affiliate_site: Optional affiliate-site attribution string.
+            utm_campaign: Optional campaign attribution string.
+            utm_source: Optional source attribution string.
+            auto_heartbeat: Whether to start periodic heartbeat pings after
+                successful authentication.
+
+        Returns:
+            A tuple containing the authentication token as a hexadecimal string
+            and the numeric MT5 session identifier.
+
+        Raises:
+            ValidationError: If ``cid`` is not exactly 16 bytes.
+            AuthenticationError: If the server rejects the login.
+            SessionError: If cleanup is pending, the client is already logged
+                in, the transport is not ready, or close invalidates the login.
+            MT5TimeoutError: If sending or receiving exceeds the configured
+                command timeout. Once transmission has begun, authentication
+                may have completed remotely even though no result was received.
+
+        """
+        self._assert_close_quiescent()
+        generation = self._session_generation
+        transport = self.transport
         async with self._session_lock:
+            self._assert_close_quiescent()
+            if generation != self._session_generation or transport is not self.transport:
+                raise SessionError("login invalidated by close")
             if self._logged_in:
                 raise SessionError("already logged in; call logout() before logging in again")
             self._bootstrap_pristine = False
@@ -542,7 +888,9 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
                 utm_campaign=utm_campaign,
                 utm_source=utm_source,
             )
-            result = await self.transport.send_command(CMD_LOGIN, payload)
+            result = await transport.send_command(CMD_LOGIN, payload)
+            if generation != self._session_generation or transport is not self.transport or self._closing:
+                raise SessionError("login invalidated by close")
             if result.code != 0:
                 raise AuthenticationError(f"MT5 Web Terminal rejected login (response code {result.code})")
             token_bytes, session_id = SeriesCodec.parse(result.body, LOGIN_RESPONSE_SCHEMA)
@@ -567,13 +915,54 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
             return bytes_to_hex(token_bytes), int(session_id)
 
     async def ping(self) -> None:
+        """Send a heartbeat command and wait for its response.
+
+        The response body and status code are not interpreted.
+
+        Returns:
+            None.
+
+        Raises:
+            SessionError: If the transport is not ready or is invalidated.
+            MT5TimeoutError: If sending or receiving exceeds the configured
+                command timeout.
+
+        """
         await self.transport.send_command(CMD_PING)
 
     async def logout(self) -> None:
+        """End the authenticated session and clear local login state.
+
+        Active reconnection is cancelled first. If that cancellation leaves no
+        ready transport, local authentication state is cleared without sending
+        another command. Otherwise, a successful logout response stops the
+        heartbeat and clears stored credentials. A server rejection leaves the
+        login state unchanged; transport failures may independently mark the
+        client disconnected and trigger configured reconnection handling.
+
+        Returns:
+            None.
+
+        Raises:
+            SessionError: If cleanup is pending, the transport is not ready,
+                the server rejects logout, or close invalidates the operation.
+            MT5TimeoutError: If sending or receiving exceeds the configured
+                command timeout. Once transmission has begun, the server may
+                have processed the logout even though no result was received.
+
+        """
+        self._assert_close_quiescent()
+        generation = self._session_generation
+        transport = self.transport
         async with self._session_lock:
+            if generation != self._session_generation or transport is not self.transport:
+                raise SessionError("logout invalidated by close")
+            self._assert_close_quiescent()
             await self._logout_unlocked()
 
     async def _logout_unlocked(self) -> None:
+        generation = self._session_generation
+        transport = self.transport
         reconnect_task = self._reconnect_task
         if (
             reconnect_task is not None
@@ -587,6 +976,8 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
                 current_task = asyncio.current_task()
                 if current_task is not None and current_task.cancelling():
                     raise
+            if generation != self._session_generation or transport is not self.transport:
+                raise SessionError("logout invalidated by close")
             if self._reconnect_task is reconnect_task:
                 self._reconnect_task = None
             # Cancellation closes the reconnect transport, invalidating that session.
@@ -596,7 +987,9 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
                 self._bootstrap_pristine = False
                 self._clear_credentials()
                 return
-        result = await self.transport.send_command(CMD_LOGOUT)
+        result = await transport.send_command(CMD_LOGOUT)
+        if generation != self._session_generation or transport is not self.transport:
+            raise SessionError("logout invalidated by close")
         if result.code != 0:
             raise SessionError(f"MT5 Web Terminal rejected logout (response code {result.code})")
         self._stop_heartbeat()
@@ -659,6 +1052,7 @@ class MT5WebClient(_PushHandlersMixin, _AccountMixin, _MarketDataMixin, _Trading
             (PROP_U64, int(login)),
             (PROP_BYTES, password_blob or bytes(160), 160),
             (PROP_U64, int(session or 0)),
+            (PROP_U64, 0),  # Additional field observed in Web Terminal build 6320.
         ]
         return SeriesCodec.serialize(fields)
 

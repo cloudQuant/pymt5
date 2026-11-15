@@ -1,6 +1,6 @@
-"""
-pymt5 - Python client for MT5 Web Terminal
-Reverse-engineered WebSocket binary protocol implementation.
+"""Asynchronous Python client for the MT5 Web Terminal.
+
+The package implements the reverse-engineered encrypted WebSocket binary protocol.
 """
 
 try:
@@ -8,7 +8,7 @@ try:
 
     __version__ = _pkg_version("mt5-web-client")
 except ImportError:
-    __version__ = "1.0.4"
+    __version__ = "1.1.0"
 
 from pymt5._dataframe import to_dataframe
 from pymt5._metrics import MetricsCollector

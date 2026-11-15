@@ -21,9 +21,9 @@ from pymt5.constants import CMD_BOOTSTRAP, CMD_LOGIN, CMD_PING
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("test")
 
-WS_URI = "wss://web.metatrader.app/terminal"
-LOGIN = 5047785364
-PASSWORD = "NyCh-i4r"
+WS_URI = os.environ["PYMT5_SERVER"]
+LOGIN = int(os.environ["PYMT5_LOGIN"])
+PASSWORD = os.environ["PYMT5_PASSWORD"]
 
 
 async def main():

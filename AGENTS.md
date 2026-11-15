@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`pymt5/` contains the library code. The main layers are `client.py` for the public async API, `transport.py` for WebSocket/session handling, `protocol.py` and `schemas.py` for binary encoding/parsing, and `constants.py` for MT5 command and enum values. `tests/` holds offline unit tests and shared setup in `tests/conftest.py`. `examples/` contains numbered usage samples, `scripts/` contains manual live-check helpers, and `docs/` contains the Sphinx source. `analysis/` stores reverse-engineering artifacts and is not part of the runtime package.
+`pymt5/` contains the library code. The main layers are `client.py` for the public async API, `transport.py` for WebSocket/session handling, `protocol.py` and `schemas.py` for binary encoding/parsing, and `constants.py` for MT5 command and enum values. `tests/` holds offline unit tests and shared setup in `tests/conftest.py`. `examples/` contains numbered usage samples, `scripts/` contains manual live-check helpers, and `docs/` contains the Sphinx source. `analysis/` contains static-analysis helpers only; third-party JavaScript snapshots are kept outside the repository, and none of these materials is part of the runtime package.
 
 ## Build, Test, and Development Commands
 

@@ -1,0 +1,149 @@
+/* Shared presentation for both language sites. */
+.wy-nav-content {
+  max-width: 1100px;
+}
+
+.pymt5-language-switch {
+  align-items: center;
+  display: flex;
+  font-size: 0.82rem;
+  gap: 0.65rem;
+  justify-content: center;
+  margin: 0.45rem auto 0.65rem;
+}
+
+.pymt5-language-switch a,
+.pymt5-language-switch span {
+  border-radius: 0.2rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.pymt5-language-switch a {
+  color: #b3d7ff;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
+}
+
+.pymt5-language-switch a:hover,
+.pymt5-language-switch a:focus {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.pymt5-language-switch a:focus {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.pymt5-language-switch span[aria-current="page"] {
+  color: #fff;
+  font-weight: 700;
+}
+
+.wy-nav-top .pymt5-language-switch {
+  display: inline-flex;
+  float: right;
+  margin: 0.55rem 0.75rem 0 0;
+}
+
+.rst-content .admonition {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.rst-content table.docutils,
+.wy-table-responsive {
+  max-width: 100%;
+}
+
+.rst-content table.docutils th {
+  white-space: normal;
+}
+
+.rst-content code.literal {
+  overflow-wrap: anywhere;
+}
+
+.highlight pre {
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+/* Author profile: static content remains usable without JavaScript. */
+.pymt5-author [hidden] {
+  display: none !important;
+}
+
+.pymt5-author-stats {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 1rem 0 1.5rem;
+}
+
+.pymt5-author-stats > div {
+  background: #f3f6f8;
+  border: 1px solid #d9e2e8;
+  border-radius: 4px;
+  padding: 0.8rem;
+  text-align: center;
+}
+
+.pymt5-author-stats dt {
+  color: #526671;
+  font-size: 0.85rem;
+}
+
+.pymt5-author-stats dd {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0.25rem 0 0;
+}
+
+.pymt5-author-status,
+.pymt5-author-repository-metadata {
+  color: #526671;
+  font-size: 0.85rem;
+}
+
+.rst-content .pymt5-author-repositories {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.rst-content .pymt5-author-repository {
+  border-top: 1px solid #d9e2e8;
+  margin: 0;
+  padding: 0.9rem 0;
+}
+
+.rst-content .pymt5-author-repository h3 {
+  font-size: 1rem;
+  margin: 0 0 0.35rem;
+}
+
+.rst-content .pymt5-author-repository p {
+  margin-bottom: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+@media screen and (max-width: 768px) {
+  .wy-nav-content {
+    margin: 0;
+    max-width: none;
+  }
+
+  .wy-side-nav-search .pymt5-language-switch {
+    margin-bottom: 0.4rem;
+  }
+}
+
+@media print {
+  .pymt5-language-switch,
+  .wy-nav-side,
+  .wy-nav-top {
+    display: none !important;
+  }
+}

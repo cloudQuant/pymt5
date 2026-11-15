@@ -3,7 +3,9 @@ import re
 import os
 import json
 
-ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
+ANALYSIS_DIR = os.path.abspath(
+    os.environ.get("PYMT5_ANALYSIS_DIR", os.path.dirname(os.path.abspath(__file__)))
+)
 
 def load_js(filename):
     with open(os.path.join(ANALYSIS_DIR, filename), 'r', encoding='utf-8') as f:
