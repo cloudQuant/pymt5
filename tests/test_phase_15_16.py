@@ -836,9 +836,9 @@ class TestHealthCheck:
         from pymt5.client import MT5WebClient
 
         client = MT5WebClient(uri="wss://example.com")
-        client._connected_at = time.monotonic()
+        client._connected_at = 100.0
         client.transport._state = TransportState.READY
-        client.transport._last_message_at = time.monotonic()
+        client.transport._last_message_at = 100.0
 
         degraded_events = []
 
@@ -847,15 +847,15 @@ class TestHealthCheck:
 
         client.on_health_degraded(on_degraded, threshold_ms=0.001)
 
-        # Mock ping with a sleep long enough to exceed Windows timer resolution (~15.6ms)
-        async def slow_ping():
-            await asyncio.sleep(0.05)
+        clock_values = iter([100.0, 100.1, 100.1])
 
-        with patch.object(client, "ping", new_callable=AsyncMock, side_effect=slow_ping):
+        with (
+            patch.object(client, "ping", new_callable=AsyncMock),
+            patch("pymt5.client.time.monotonic", new=lambda: next(clock_values)),
+        ):
             status = await client.health_check()
 
-        assert status.ping_latency_ms is not None
-        assert status.ping_latency_ms > 0.001
+        assert status.ping_latency_ms == pytest.approx(100.0)
         assert len(degraded_events) == 1
         assert degraded_events[0] is status
 
@@ -879,23 +879,26 @@ class TestHealthCheck:
         from pymt5.client import MT5WebClient
 
         client = MT5WebClient(uri="wss://example.com")
-        client._connected_at = time.monotonic()
+        client._connected_at = 100.0
         client.transport._state = TransportState.READY
-        client.transport._last_message_at = time.monotonic()
+        client.transport._last_message_at = 100.0
 
         def broken_callback(status):
             raise RuntimeError("broken")
 
         client.on_health_degraded(broken_callback, threshold_ms=0.001)
 
-        async def slow_ping():
-            await asyncio.sleep(0.01)
+        clock_values = iter([100.0, 100.1, 100.1])
 
-        with patch.object(client, "ping", new_callable=AsyncMock, side_effect=slow_ping):
+        with (
+            patch.object(client, "ping", new_callable=AsyncMock),
+            patch("pymt5.client.time.monotonic", new=lambda: next(clock_values)),
+        ):
             # Should not crash
             status = await client.health_check()
 
         assert status is not None
+        assert status.ping_latency_ms == pytest.approx(100.0)
 
 
 class TestTransportLastMessageAt:
