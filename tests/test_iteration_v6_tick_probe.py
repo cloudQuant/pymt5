@@ -144,40 +144,97 @@ async def test_bar_failure_does_not_claim_reference_and_redacts_error():
     client.close.assert_awaited_once()
 
 
-@pytest.mark.parametrize(("requested", "expected_id"), [("XAUUSD", 43), ("", 42)])
-async def test_integration_symbol_environment_selects_matching_tick(monkeypatch, requested, expected_id):
+def load_integration(monkeypatch, *, require_tick=None):
     monkeypatch.setenv("PYMT5_LOGIN", "0")
     monkeypatch.setenv("PYMT5_PASSWORD", "")
     monkeypatch.setenv("PYMT5_SERVER", "wss://example.invalid")
-    monkeypatch.setenv("PYMT5_TEST_SYMBOL", requested)
+    monkeypatch.setenv("PYMT5_TEST_SYMBOL", "")
+    if require_tick is None:
+        monkeypatch.delenv("PYMT5_REQUIRE_TICK", raising=False)
+    else:
+        monkeypatch.setenv("PYMT5_REQUIRE_TICK", require_tick)
     path = Path(__file__).with_name("test_integration.py")
     spec = importlib.util.spec_from_file_location("demo_integration_probe", path)
     assert spec and spec.loader
     integration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(integration)
+    return integration
 
-    class FakeIntegrationClient:
-        def __init__(self):
-            self.load_symbols = AsyncMock(
-                return_value={"EURUSD": SymbolInfo("EURUSD", 42, 5), "XAUUSD": SymbolInfo("XAUUSD", 43, 2)}
-            )
-            self.unsubscribe_ticks = AsyncMock()
-            self.subscribed = None
-            self.callback = None
 
-        def on_tick(self, callback):
-            self.callback = callback
+class FakeIntegrationClient:
+    def __init__(self, *, emit_ticks=True, unsubscribe_error=None):
+        self.load_symbols = AsyncMock(
+            return_value={"EURUSD": SymbolInfo("EURUSD", 42, 5), "XAUUSD": SymbolInfo("XAUUSD", 43, 2)}
+        )
+        self.emit_ticks = emit_ticks
+        self.unsubscribe_error = unsubscribe_error
+        self.unsubscribe_calls = []
+        self.subscribed = None
+        self.callback = None
+        self._subscribed_ids = []
 
-        async def subscribe_ticks(self, ids):
-            self.subscribed = ids
+    def on_tick(self, callback):
+        self.callback = callback
+
+    async def subscribe_ticks(self, ids):
+        self.subscribed = list(ids)
+        self._subscribed_ids = sorted(set(self._subscribed_ids) | set(ids))
+        if self.emit_ticks:
             # An unrelated tick must not satisfy the selected-symbol check.
             self.callback([{"symbol_id": 999}])
             self.callback([{"symbol_id": ids[0]}])
 
+    async def unsubscribe_ticks(self, ids):
+        self.unsubscribe_calls.append(list(ids))
+        if self.unsubscribe_error is not None:
+            raise self.unsubscribe_error
+        self._subscribed_ids = sorted(set(self._subscribed_ids) - set(ids))
+
+
+@pytest.mark.parametrize(("requested", "expected_id"), [("XAUUSD", 43), ("", 42)])
+async def test_integration_symbol_environment_selects_matching_tick(monkeypatch, requested, expected_id):
+    integration = load_integration(monkeypatch)
+    monkeypatch.setenv("PYMT5_TEST_SYMBOL", requested)
     client = FakeIntegrationClient()
+
     await integration.test_tick_subscription(client)
-    assert client.subscribed == [expected_id]
-    client.unsubscribe_ticks.assert_awaited_once_with([expected_id])
+
+    assert client.subscribed[0] == expected_id
+    assert len(client.subscribed) == 2
+    assert set(client.subscribed) == {42, 43}
+    assert client.unsubscribe_calls == [[expected_id]]
+
+
+@pytest.mark.parametrize(("required", "outcome"), [("1", "failed"), (None, "skipped")])
+async def test_integration_tick_timeout_respects_required_mode(monkeypatch, required, outcome):
+    integration = load_integration(monkeypatch, require_tick=required)
+    client = FakeIntegrationClient(emit_ticks=False)
+
+    def immediate_timeout(awaitable, timeout):
+        awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(integration.asyncio, "wait_for", immediate_timeout)
+    expected_type = pytest.fail.Exception if outcome == "failed" else pytest.skip.Exception
+    with pytest.raises((pytest.fail.Exception, pytest.skip.Exception)) as caught:
+        await integration.test_tick_subscription(client)
+
+    assert caught.type is expected_type
+    assert set(client.subscribed) == {42, 43}
+    assert client.unsubscribe_calls == [[42]]
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_integration_final_unsubscribe_enforces_state_contract(monkeypatch, rejected):
+    integration = load_integration(monkeypatch)
+    error = ProtocolError("tick unsubscription command 7 failed: code=1") if rejected else None
+    client = FakeIntegrationClient(emit_ticks=False, unsubscribe_error=error)
+
+    await integration.test_final_tick_unsubscription_contract(client)
+
+    assert client.subscribed == [42]
+    assert client.unsubscribe_calls == [[42]]
+    assert client._subscribed_ids == ([42] if rejected else [])
 
 
 def test_cli_requires_exact_symbol_and_emits_sanitized_no_sample(monkeypatch, capsys):

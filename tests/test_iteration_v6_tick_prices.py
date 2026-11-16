@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from pymt5._parsers import _normalize_tick_price_value
 from pymt5.client import MT5WebClient
 from pymt5.constants import CMD_TICK_PUSH, PROP_F64, PROP_I32, PROP_I64, PROP_U16, PROP_U32
 from pymt5.protocol import ResponseFrame, SeriesCodec
@@ -139,6 +140,11 @@ def test_auto_diagnostic_is_emitted_once_per_symbol_and_mode(
 def test_invalid_tick_price_configuration_is_rejected(kwargs: dict, match: str) -> None:
     with pytest.raises(ValueError, match=match):
         MT5WebClient(**kwargs)
+
+
+def test_normalize_tick_price_value_rejects_unknown_mode_directly() -> None:
+    with pytest.raises(ValueError, match="unknown tick price mode: 'invalid'"):
+        _normalize_tick_price_value(1.0, 5, mode="invalid")  # type: ignore[arg-type]
 
 
 async def _offline_transport(*args, **kwargs) -> MT5WebSocketTransport:

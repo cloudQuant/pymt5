@@ -563,3 +563,88 @@ async def test_close_and_reconnect_do_not_inherit_old_stuck_send_locks():
         tasks = [task for task in (old_request, new_request, *send_tasks) if task is not None]
         await asyncio.gather(*tasks, return_exceptions=True)
         await transport.close()
+
+
+async def test_observe_isolation_task_handles_pending_task_inspection(caplog):
+    task = asyncio.create_task(asyncio.Event().wait())
+    caplog.set_level("WARNING", logger="pymt5.transport")
+    try:
+        transport_module._observe_isolation_task(task)
+        assert "connection isolation task inspection failed: InvalidStateError" in caplog.text
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("mode", ["invalidated_disabled", "enabled_success"])
+async def test_acquire_rate_limit_boundaries(mode):
+    transport, _socket = _transport()
+    invalidated = asyncio.Event()
+    if mode == "invalidated_disabled":
+        transport._rate_limiter.rate = 0
+        invalidated.set()
+        with pytest.raises(SessionError, match="transport not ready"):
+            await transport._acquire_rate_limit(invalidated, CMD_PING)
+        return
+
+    transport._rate_limiter.rate = 1
+    transport._rate_limiter.acquire = AsyncMock()
+    created = []
+    real_create_task = asyncio.create_task
+
+    def track_task(coro):
+        task = real_create_task(coro)
+        created.append(task)
+        return task
+
+    with patch("pymt5.transport.asyncio.create_task", side_effect=track_task):
+        await transport._acquire_rate_limit(invalidated, CMD_PING)
+    transport._rate_limiter.acquire.assert_awaited_once_with()
+    assert len(created) == 2
+    assert all(task.done() for task in created)
+
+
+async def test_isolation_preserves_cancellation_during_receive_cleanup():
+    transport, socket = _transport()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+    notifications = []
+
+    async def receive():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await release.wait()
+
+    transport._recv_task = asyncio.create_task(receive())
+    await asyncio.sleep(0)
+    transport._on_disconnect = lambda: notifications.append(True)
+    isolation = asyncio.create_task(transport._invalidate_uncertain_send(socket, transport._generation))
+    await cancelled.wait()
+    isolation.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await isolation
+    assert transport.state is TransportState.ERROR
+    assert transport.ws is None
+    assert notifications == [True]
+    socket.close.assert_awaited_once()
+
+
+async def test_isolation_survives_disconnect_callback_failure(caplog):
+    transport, socket = _transport()
+
+    def fail_callback():
+        raise RuntimeError("callback failed")
+
+    transport._on_disconnect = fail_callback
+    caplog.set_level("WARNING", logger="pymt5.transport")
+
+    await transport._invalidate_uncertain_send(socket, transport._generation)
+
+    assert transport.state is TransportState.ERROR
+    assert transport.ws is None
+    assert "disconnect callback failed during connection isolation" in caplog.text
+    socket.close.assert_awaited_once()

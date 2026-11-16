@@ -649,6 +649,22 @@ class TestDebugModeOn:
         finally:
             self._reload_protocol_without_debug()
 
+    def test_parse_with_debug_warns_when_consumed_size_differs_from_schema(self):
+        """A schema-size/decoder mismatch emits the defensive cursor warning."""
+        proto = self._reload_protocol_with_debug()
+        try:
+            schema = [{"propType": PROP_U32}]
+            data = struct.pack("<I", 42)
+            with (
+                patch.object(proto, "get_series_size", return_value=3),
+                patch.object(proto._debug_logger, "warning") as mock_warn,
+            ):
+                assert proto.SeriesCodec.parse(data, schema) == [42]
+            warning_msg = mock_warn.call_args.args[0] % tuple(mock_warn.call_args.args[1:])
+            assert "cursor=4 != expected_end=3" in warning_msg
+        finally:
+            self._reload_protocol_without_debug()
+
     def test_parse_with_debug_warns_bad_timestamp(self):
         """Timestamps outside [year 2000, year 2100] trigger a warning."""
         proto = self._reload_protocol_with_debug()

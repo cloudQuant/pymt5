@@ -7,13 +7,15 @@ Optional PYMT5_TEST_SYMBOL selects the symbol for the live tick test.
 
 import asyncio
 import os
+from datetime import UTC, datetime
 
 import pytest
 
 from pymt5.client import MT5WebClient
 from pymt5.events import HealthStatus
+from pymt5.exceptions import ProtocolError
 from pymt5.transport import TransportState
-from pymt5.types import SymbolInfo
+from pymt5.types import AccountInfo, SymbolInfo
 
 pytestmark = [
     pytest.mark.skipif(
@@ -30,6 +32,14 @@ pytestmark = [
 _SERVER = os.environ.get("PYMT5_SERVER", "wss://web.metatrader.app/terminal")
 _LOGIN = int(os.environ.get("PYMT5_LOGIN", "0"))
 _PASSWORD = os.environ.get("PYMT5_PASSWORD", "")
+_REQUIRE_TICK = os.environ.get("PYMT5_REQUIRE_TICK") == "1"
+
+
+def _select_symbol(symbols: dict[str, SymbolInfo]) -> SymbolInfo:
+    requested = os.environ.get("PYMT5_TEST_SYMBOL", "").strip()
+    if requested and requested not in symbols:
+        pytest.fail(f"PYMT5_TEST_SYMBOL {requested!r} is not in the server symbol list")
+    return symbols[requested] if requested else next(iter(symbols.values()))
 
 
 # ---------------------------------------------------------------------------
@@ -109,16 +119,71 @@ async def test_symbol_load(logged_in_client: MT5WebClient):
 
 
 @pytest.mark.asyncio
+async def test_account_and_terminal_apis(logged_in_client: MT5WebClient):
+    """Read account and terminal state without asserting private values."""
+    account = await logged_in_client.get_account()
+    assert isinstance(account, dict)
+    assert account
+
+    summary = await logged_in_client.get_account_summary()
+    assert isinstance(summary, AccountInfo)
+
+    terminal = await logged_in_client.terminal_info()
+    assert terminal["connected"] is True
+
+    version = await logged_in_client.version()
+    assert version is not None
+    assert len(version) == 3
+    assert version[1] == logged_in_client.server_build
+
+
+@pytest.mark.asyncio
+async def test_read_only_trade_queries(logged_in_client: MT5WebClient):
+    """Query current and historical trade collections without mutations."""
+    current = await logged_in_client.get_positions_and_orders()
+    assert set(current) == {"positions", "orders"}
+    assert isinstance(current["positions"], list)
+    assert isinstance(current["orders"], list)
+
+    history = await logged_in_client.get_trade_history()
+    assert set(history) == {"deals", "orders"}
+    assert isinstance(history["deals"], list)
+    assert isinstance(history["orders"], list)
+
+
+@pytest.mark.asyncio
+async def test_symbol_details_groups_and_historical_rates(logged_in_client: MT5WebClient):
+    """Resolve public symbol metadata and recent H1 bars for an active symbol."""
+    symbols = await logged_in_client.load_symbols()
+    symbol = _select_symbol(symbols)
+
+    details = await logged_in_client.get_full_symbol_info(symbol.name)
+    assert details is not None
+    assert details["trade_symbol"] == symbol.name
+    assert details["symbol_id"] == symbol.symbol_id
+    assert details["digits"] == symbol.digits
+
+    groups = await logged_in_client.get_symbol_groups()
+    assert isinstance(groups, list)
+    assert all(isinstance(group, str) for group in groups)
+
+    end = int(datetime.now(UTC).timestamp())
+    bars = await logged_in_client.get_rates(symbol.name, 60, end - 3 * 86400, end)
+    assert bars
+    assert {"time", "open", "high", "low", "close"}.issubset(bars[0])
+
+
+@pytest.mark.asyncio
 async def test_tick_subscription(logged_in_client: MT5WebClient):
     """Subscribe the selected symbol, wait for its tick, and unsubscribe."""
     symbols = await logged_in_client.load_symbols()
     assert len(symbols) >= 1
 
-    requested = os.environ.get("PYMT5_TEST_SYMBOL", "").strip()
-    if requested and requested not in symbols:
-        pytest.fail(f"PYMT5_TEST_SYMBOL {requested!r} is not in the server symbol list")
-    symbol = symbols[requested] if requested else next(iter(symbols.values()))
+    symbol = _select_symbol(symbols)
     symbol_id = symbol.symbol_id
+    control = next((candidate for candidate in symbols.values() if candidate.symbol_id != symbol_id), None)
+    if control is None:
+        pytest.fail("Tick integration requires a second symbol for partial-unsubscribe cleanup")
     tick_received = asyncio.Event()
     received_ticks: list[dict] = []
 
@@ -129,17 +194,37 @@ async def test_tick_subscription(logged_in_client: MT5WebClient):
             tick_received.set()
 
     logged_in_client.on_tick(on_tick)
-    await logged_in_client.subscribe_ticks([symbol_id])
+    await logged_in_client.subscribe_ticks([symbol_id, control.symbol_id])
     try:
         # Wait up to 30 seconds for a tick.
         try:
             await asyncio.wait_for(tick_received.wait(), timeout=30.0)
         except TimeoutError:
-            pytest.skip("No tick received within 30s (market may be closed)")
+            message = "No tick received within 30s (market may be closed)"
+            if _REQUIRE_TICK:
+                pytest.fail(message)
+            pytest.skip(message)
 
         assert len(received_ticks) >= 1
     finally:
+        # Build 6320 rejects an empty set, so retain a control until close.
         await logged_in_client.unsubscribe_ticks([symbol_id])
+
+
+@pytest.mark.asyncio
+async def test_final_tick_unsubscription_contract(logged_in_client: MT5WebClient):
+    """A server may reject an empty set, but it must not corrupt local state."""
+    symbols = await logged_in_client.load_symbols()
+    symbol_id = _select_symbol(symbols).symbol_id
+    await logged_in_client.subscribe_ticks([symbol_id])
+
+    try:
+        await logged_in_client.unsubscribe_ticks([symbol_id])
+    except ProtocolError as exc:
+        assert str(exc).endswith("code=1")
+        assert logged_in_client._subscribed_ids == [symbol_id]
+    else:
+        assert logged_in_client._subscribed_ids == []
 
 
 @pytest.mark.asyncio

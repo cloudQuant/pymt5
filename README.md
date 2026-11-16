@@ -174,10 +174,51 @@ python docs/build_docs.py        # build /en/ and /zh-CN/
 python docs/check_docs.py        # validate links and language switches
 ```
 
-CI is configured for Python 3.11–3.13 on Linux, macOS, and Windows. Default
-unit tests are offline. Live integration tests require explicit
-`PYMT5_INTEGRATION=1` and authorized demo credentials; they are not implied by
-an offline pass.
+CI tests Python 3.11–3.13 on Linux, macOS, and Windows. Ordinary CI and release
+tests explicitly deselect `integration`, never use demo credentials, and enforce
+**100% offline statement coverage**. An offline pass is not live broker
+certification.
+
+### Read-only demo acceptance
+
+Use an authorized demo account and an exact symbol that is actively trading.
+Set `PYMT5_SERVER`, `PYMT5_LOGIN`, and `PYMT5_PASSWORD` through your secret
+manager, then run during that symbol's market hours:
+
+```bash
+export PYMT5_INTEGRATION=1
+export PYMT5_REQUIRE_TICK=1       # no tick is a failure, not a skip
+export PYMT5_TEST_SYMBOL=EURUSD
+export PYMT5_LOG_LEVEL=CRITICAL   # avoid sensitive login/session logs
+python -m pytest tests/test_integration.py -v --tb=short
+```
+
+The ten tests cover connection/login, symbols and full symbol details, account
+and terminal reads, positions/orders/history queries, historical bars,
+heartbeat/health, and real tick subscriptions. They never place or modify
+trades. Without `PYMT5_REQUIRE_TICK=1`, no tick within 30 seconds remains a skip
+for local closed-market diagnostics, not evidence that tick parsing passed.
+Build 6320 rejects removal of the final tick subscription with `code=1`; the
+contract test requires the client to raise and preserve the confirmed state,
+while successful removal on other servers must clear it. Closing the connection
+performs final cleanup.
+
+### Scheduled demo CI
+
+`.github/workflows/demo.yml` runs separately at **01:00 and 13:00 UTC,
+Monday–Friday**, or by manual dispatch. Scheduled runs are disabled until a
+maintainer sets repository variable `PYMT5_DEMO_ENABLED=1`. Configure protected
+GitHub environment **`demo`** with:
+
+- secrets `PYMT5_LOGIN` and `PYMT5_PASSWORD`;
+- optional repository/environment variables `PYMT5_SERVER` and
+  `PYMT5_TEST_SYMBOL` (defaults: the MetaQuotes Web endpoint and `EURUSD`).
+
+The job requires a real tick and never runs on pull requests. Cron is only a
+market-hours heuristic: exchange holidays, symbol-specific sessions, and manual
+runs still require an active symbol. GitHub schedules workflows from the default
+branch; the workflow must first be pushed and be available on the applicable
+ref. Local test commands do not constitute a remote GitHub Actions run.
 
 When reporting an issue, include the server build, minimal reproduction, and
 sanitized exception output. Never include passwords, tokens, session IDs, CIDs,

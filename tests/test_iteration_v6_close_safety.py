@@ -1,7 +1,7 @@
 """Client close retains the first error while completing local cleanup."""
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -328,3 +328,111 @@ async def test_unfinished_close_blocks_sessions_until_cleanup_finishes():
     assert client._logged_in
     client.transport.close.assert_awaited_once()
     client.transport.send_command.assert_awaited_once()
+
+
+async def test_close_records_own_cancellation_while_waiting_for_reconnect():
+    client = configured_client()
+    client._logout_unlocked = AsyncMock()
+    client.transport.close = AsyncMock()
+    started = asyncio.Event()
+
+    async def reconnect():
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_task = client._unfinished_close_task
+            assert cleanup_task is not None
+            cleanup_task.cancel()
+            raise
+
+    client._reconnect_task = asyncio.create_task(reconnect())
+    await started.wait()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(client.close(), timeout=1)
+    client.transport.close.assert_awaited_once()
+    assert_cleared(client)
+
+
+async def test_close_records_reconnect_task_failure():
+    client = configured_client()
+    client._logout_unlocked = AsyncMock()
+    client.transport.close = AsyncMock()
+
+    async def failed_reconnect():
+        raise RuntimeError("reconnect failed")
+
+    client._reconnect_task = asyncio.create_task(failed_reconnect())
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="reconnect failed"):
+        await client.close()
+    client.transport.close.assert_awaited_once()
+    assert_cleared(client)
+
+
+async def test_close_preserves_session_lock_failure_when_fallback_close_fails():
+    client = configured_client()
+    client._session_lock.acquire = AsyncMock(side_effect=ValueError("lock first"))
+    client.transport.close = AsyncMock(side_effect=RuntimeError("close second"))
+
+    with pytest.raises(ValueError, match="lock first"):
+        await client.close()
+    client.transport.close.assert_awaited_once()
+    assert_cleared(client)
+
+
+async def test_close_records_cancellation_during_timeout_grace_period():
+    client = configured_client()
+    client.timeout = 0.02
+    client._logout_unlocked = AsyncMock()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+
+    async def uncooperative_close():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await release.wait()
+
+    client.transport.close = AsyncMock(side_effect=uncooperative_close)
+    close_task = asyncio.create_task(client.close())
+    await cancelled.wait()
+    close_task.cancel()
+    release.set()
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(close_task, timeout=1)
+    client.transport.close.assert_awaited_once()
+    assert_cleared(client)
+
+
+async def test_close_records_cleanup_finalizer_failure():
+    client = configured_client()
+    client._logout_unlocked = AsyncMock()
+    client.transport.close = AsyncMock()
+    client._stop_heartbeat = MagicMock(side_effect=[None, None, ValueError("finalizer failed"), None])
+
+    def wait_until_cleanup_finishes(awaitable, timeout):
+        released = asyncio.get_running_loop().create_future()
+
+        def consume_and_release(future):
+            if not future.cancelled():
+                future.exception()
+            if not released.done():
+                released.set_result(None)
+
+        awaitable.add_done_callback(consume_and_release)
+        return released
+
+    # The shielded cleanup failure is consumed by the callback, so the ValueError
+    # reaches close() only through cleanup_task.result().
+    with (
+        patch("pymt5.client.asyncio.wait_for", new=wait_until_cleanup_finishes),
+        pytest.raises(ValueError, match="finalizer failed"),
+    ):
+        await client.close()
+    client.transport.close.assert_awaited_once()
+    assert_cleared(client)

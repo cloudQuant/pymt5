@@ -5,7 +5,7 @@ and error-path handling for every push handler method.
 """
 
 import struct
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from pymt5._push_handlers import _PushHandlersMixin
 from pymt5.constants import (
@@ -869,6 +869,28 @@ class TestOnSymbolDetails:
 
         callback.assert_called_once_with([])
 
+    def test_stops_if_body_shrinks_during_decode(self) -> None:
+        client = MockClient()
+        client.transport.server_build = 6090
+        callback = MagicMock()
+        client.on_symbol_details(callback)
+        handler = client.transport.on.call_args[0][1]
+        body = _build_symbol_details_body(symbol_id=42) + _build_symbol_details_body(symbol_id=43)
+        result = CommandResult(command=CMD_SYMBOL_DETAILS_PUSH, code=0, body=body)
+        real_parse_at = SeriesCodec.parse_at
+
+        def shrink_after_decode(body, schema, offset):
+            values = real_parse_at(body, schema, offset)
+            result.body = b""
+            return values
+
+        with patch("pymt5._push_handlers.SeriesCodec.parse_at", side_effect=shrink_after_decode):
+            handler(result)
+
+        details = callback.call_args.args[0]
+        assert len(details) == 1
+        assert details[0]["symbol_id"] == 42
+
 
 # ---------------------------------------------------------------------------
 # on_trade_result
@@ -1114,6 +1136,21 @@ class TestCacheTickPush:
         assert 2 in client._tick_cache_by_id
         assert "EURUSD" in client._tick_cache_by_name
         assert "GBPUSD" in client._tick_cache_by_name
+
+
+    def test_eviction_stops_when_access_order_is_inconsistent(self) -> None:
+        client = MockClient()
+        client._max_tick_symbols = 1
+        client._tick_history_by_id = {1: ["first"], 2: ["second"]}
+        client._tick_history_access_order = []
+        client._parse_ticks = MagicMock(return_value=[{"symbol_id": 3}])
+
+        client._cache_tick_push(CommandResult(command=CMD_TICK_PUSH, code=0, body=b""))
+
+        assert set(client._tick_history_by_id) == {1, 2}
+        assert client._tick_history_by_id[1] == ["first"]
+        assert client._tick_history_by_id[2] == ["second"]
+        assert client._tick_history_access_order == []
 
 
 # ---------------------------------------------------------------------------
