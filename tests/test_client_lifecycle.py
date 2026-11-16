@@ -1396,3 +1396,178 @@ async def test_reconnect_loop_replaces_transport():
     assert client.transport is new_transport
     # connect was called on the new transport
     new_transport.connect.assert_awaited_once()
+
+
+async def test_connect_rejects_session_invalidated_by_transport_connect():
+    client = MT5WebClient()
+
+    async def invalidate():
+        client._closing = True
+
+    client.transport.connect = AsyncMock(side_effect=invalidate)
+    with pytest.raises(SessionError, match="connection invalidated by close"):
+        await client.connect()
+    assert client._bootstrap_pristine is False
+
+
+@pytest.mark.parametrize(
+    ("stage", "constructor_calls", "connect_calls", "login_calls", "tick_calls", "book_calls"),
+    [
+        ("before_start", 0, 0, 0, 0, 0),
+        ("after_sleep", 0, 0, 0, 0, 0),
+        ("after_constructor", 1, 0, 0, 0, 0),
+        ("after_connect", 1, 1, 0, 0, 0),
+        ("after_login", 1, 1, 1, 0, 0),
+        ("after_ticks", 1, 1, 1, 1, 0),
+        ("after_book", 1, 1, 1, 1, 1),
+        ("after_error", 1, 1, 0, 0, 0),
+    ],
+)
+async def test_reconnect_returns_when_session_is_invalidated(
+    stage, constructor_calls, connect_calls, login_calls, tick_calls, book_calls
+):
+    client = MT5WebClient(auto_reconnect=True, max_reconnect_attempts=1, reconnect_delay=0)
+    client._login_kwargs = {"login": 1, "password": "test"}
+    client.transport.close = AsyncMock()
+    client.login = AsyncMock(return_value=("token", 1))
+    client.subscribe_ticks = AsyncMock()
+    client.subscribe_book = AsyncMock()
+    if stage in {"after_ticks", "after_book"}:
+        client._subscribed_ids = [1]
+        client._subscribed_book_ids = [2]
+
+    def invalidate(*_args, **_kwargs):
+        client._session_generation += 1
+
+    new_transport = MagicMock()
+    new_transport._listeners = {}
+    new_transport._callback_error_handlers = []
+    new_transport.close = AsyncMock()
+    new_transport.connect = AsyncMock()
+
+    if stage == "after_connect":
+        new_transport.connect.side_effect = invalidate
+    elif stage == "after_error":
+
+        async def fail_and_invalidate():
+            invalidate()
+            raise OSError("connection failed")
+
+        new_transport.connect.side_effect = fail_and_invalidate
+    elif stage == "after_login":
+        client.login.side_effect = invalidate
+    elif stage == "after_ticks":
+        client.subscribe_ticks.side_effect = invalidate
+    elif stage == "after_book":
+        client.subscribe_book.side_effect = invalidate
+
+    def construct(*_args, **_kwargs):
+        if stage == "after_constructor":
+            invalidate()
+        return new_transport
+
+    sleep = AsyncMock()
+    if stage == "after_sleep":
+        sleep.side_effect = invalidate
+    if stage == "before_start":
+        client._closing = True
+
+    with (
+        patch("pymt5.client.MT5WebSocketTransport", side_effect=construct) as constructor,
+        patch("pymt5.client.asyncio.sleep", sleep),
+        patch("pymt5.client.random.uniform", return_value=0),
+    ):
+        await client._reconnect_loop()
+
+    assert constructor.call_count == constructor_calls
+    assert new_transport.connect.await_count == connect_calls
+    assert client.login.await_count == login_calls
+    assert client.subscribe_ticks.await_count == tick_calls
+    assert client.subscribe_book.await_count == book_calls
+    assert client._reconnect_count == 0
+
+
+async def test_close_reconnect_transport_defaults_to_current_transport():
+    client = MT5WebClient()
+    client.transport.close = AsyncMock()
+
+    await client._close_reconnect_transport()
+
+    assert client.transport.is_ready is False
+    assert client.transport._on_disconnect is None
+    client.transport.close.assert_awaited_once_with()
+
+
+async def test_close_reconnect_transport_preserves_cancellation_when_close_is_done():
+    client = MT5WebClient()
+    client.transport.close = AsyncMock()
+
+    async def cancel_after_close(awaitable, timeout):
+        await asyncio.sleep(0)
+        raise asyncio.CancelledError
+
+    with (
+        patch("pymt5.client.asyncio.wait_for", side_effect=cancel_after_close),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await client._close_reconnect_transport()
+    client.transport.close.assert_awaited_once_with()
+
+
+async def test_login_waiting_for_session_lock_rejects_stale_generation():
+    client = MT5WebClient()
+    client.transport.send_command = AsyncMock()
+    await client._session_lock.acquire()
+    login_task = asyncio.create_task(client.login(1, "test", auto_heartbeat=False))
+    await asyncio.sleep(0)
+    client._session_generation += 1
+    client._session_lock.release()
+
+    with pytest.raises(SessionError, match="login invalidated by close"):
+        await login_task
+    client.transport.send_command.assert_not_awaited()
+
+
+async def test_logout_propagates_caller_cancellation_while_cancelling_reconnect():
+    client = MT5WebClient()
+    client.transport.send_command = AsyncMock()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+
+    async def reconnect():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await release.wait()
+            raise
+
+    client._reconnect_task = asyncio.create_task(reconnect())
+    await asyncio.sleep(0)
+    logout_task = asyncio.create_task(client._logout_unlocked())
+    await cancelled.wait()
+    logout_task.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await logout_task
+    client.transport.send_command.assert_not_awaited()
+
+
+async def test_logout_rejects_generation_changed_by_cancelled_reconnect():
+    client = MT5WebClient()
+    client.transport.send_command = AsyncMock()
+
+    async def reconnect():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            client._session_generation += 1
+            raise
+
+    client._reconnect_task = asyncio.create_task(reconnect())
+    await asyncio.sleep(0)
+
+    with pytest.raises(SessionError, match="logout invalidated by close"):
+        await client._logout_unlocked()
+    client.transport.send_command.assert_not_awaited()

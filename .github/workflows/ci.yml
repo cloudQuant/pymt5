@@ -38,7 +38,7 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
-          python -m pytest -p pytest_asyncio.plugin -p pytest_cov.plugin tests/ -v --tb=short --cov=pymt5 --cov-report=term-missing
+          python -m pytest -p pytest_asyncio.plugin -p pytest_cov.plugin tests/ -m "not integration" -v --tb=short --cov=pymt5 --cov-report=term-missing --cov-fail-under=100
 
   lint:
     name: Lint & Type Check

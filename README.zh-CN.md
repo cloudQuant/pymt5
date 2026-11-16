@@ -163,9 +163,45 @@ python docs/build_docs.py        # 构建 /en/ 和 /zh-CN/
 python docs/check_docs.py        # 检查链接和语言切换
 ```
 
-CI 配置了 Linux、macOS、Windows 上的 Python 3.11–3.13 矩阵。默认单元测试
-全部离线运行。在线 integration 测试需要显式设置 `PYMT5_INTEGRATION=1` 和
-已授权的 demo 凭据；离线测试通过不代表在线验收通过。
+CI 在 Linux、macOS、Windows 上测试 Python 3.11–3.13。普通 CI 和 release
+测试显式排除 `integration`，不使用 demo 凭据，并强制执行 **100% 离线语句
+覆盖率**。离线通过不代表在线券商兼容性验收通过。
+
+### 只读 demo 验收
+
+使用已获授权的 demo 账户和正在交易的准确品种。通过 secret manager 设置
+`PYMT5_SERVER`、`PYMT5_LOGIN`、`PYMT5_PASSWORD`，然后在该品种的交易时段
+运行：
+
+```bash
+export PYMT5_INTEGRATION=1
+export PYMT5_REQUIRE_TICK=1       # 没有 tick 必须失败，不能跳过
+export PYMT5_TEST_SYMBOL=EURUSD
+export PYMT5_LOG_LEVEL=CRITICAL   # 避免输出敏感登录/session 日志
+python -m pytest tests/test_integration.py -v --tb=short
+```
+
+这十个测试覆盖连接/登录、symbol 与完整 symbol 信息、账户和 terminal 只读
+查询、持仓/订单/历史查询、历史K线、heartbeat/health 以及真实 tick 订阅，
+不会下单或改单。未设置 `PYMT5_REQUIRE_TICK=1` 时，30 秒无 tick 仍会跳过，
+仅用于本地休市诊断，不代表 tick 解析通过。build 6320 会以 `code=1` 拒绝
+最后一个 tick 品种的退订；合同测试要求客户端抛错并保留已确认状态，而在允许
+该操作的其他服务器上必须清空状态。最终清理由关闭连接完成。
+
+### 定时 demo CI
+
+`.github/workflows/demo.yml` 独立运行于**周一至周五 01:00、13:00 UTC**，
+也支持手动触发。只有维护者设置仓库变量 `PYMT5_DEMO_ENABLED=1` 后才会执行
+定时任务。请在受保护的 GitHub **`demo`** environment 中配置：
+
+- secrets：`PYMT5_LOGIN`、`PYMT5_PASSWORD`；
+- 可选仓库/environment 变量：`PYMT5_SERVER`、`PYMT5_TEST_SYMBOL`（默认分别
+  为 MetaQuotes Web 地址和 `EURUSD`）。
+
+任务强制要求收到真实 tick，不会在 pull request 上运行。cron 只是交易时段
+启发式配置：交易所假期、品种自身交易时段和手动运行仍需确认品种活跃。GitHub
+从默认分支执行定时 workflow；必须先将 workflow 推送并使其存在于相应 ref。
+本地测试命令不等于已执行远程 GitHub Actions。
 
 反馈问题时，请提供服务器 build、最小复现和脱敏异常信息。绝不要包含密码、
 token、session ID、CID 或私有账户/持仓数据。

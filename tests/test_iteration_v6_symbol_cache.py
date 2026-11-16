@@ -159,3 +159,29 @@ async def test_invalidation_clears_negative_entries(monkeypatch: pytest.MonkeyPa
     client.invalidate_symbol_cache()
     assert await client._resolve_symbol_id("NEW") == 7
     assert client.get_symbols.await_count == 2
+
+
+async def test_resolve_symbol_id_evicts_expired_negative_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [110.0]
+    _clock(monkeypatch, now)
+    client = _SymbolCacheClient([[]], ttl=60.0)
+    client._unknown_symbol_misses = {"EXPIRED": 104.0, "FRESH": 109.0}
+
+    assert await client._resolve_symbol_id("NEW") is None
+
+    assert client._unknown_symbol_misses == {"FRESH": 109.0, "NEW": 110.0}
+    assert client.get_symbols.await_count == 1
+
+
+def test_cache_full_symbol_lazily_initializes_timestamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [123.0]
+    _clock(monkeypatch, now)
+    client = _SymbolCacheClient([], ttl=60.0)
+    client._full_symbols_loaded_at = None
+    source = {"trade_symbol": "EURUSD", "contract_size": 100_000.0}
+
+    cached = client._cache_full_symbol("EURUSD", source)
+
+    assert cached == source
+    assert cached is not source
+    assert client._full_symbols_loaded_at == {"EURUSD": 123.0}

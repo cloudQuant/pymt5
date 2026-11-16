@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -475,3 +476,20 @@ async def test_normal_eof_drives_client_auto_reconnect() -> None:
     client.login.assert_awaited_once()
     assert client.transport is replacement
     assert client._closing is False
+
+
+async def test_connect_defaults_server_build_when_prefix_decode_fails() -> None:
+    transport = MT5WebSocketTransport("ws://offline.invalid")
+    ws = _WebSocket()
+    bootstrap = CommandResult(CMD_BOOTSTRAP, 0, b"\x00" * 66 + b"a" * 16)
+    transport._send_raw = AsyncMock(return_value=bootstrap)  # type: ignore[method-assign]
+
+    with (
+        patch("pymt5.transport.websockets.connect", new=AsyncMock(return_value=ws)),
+        patch("pymt5.transport.struct.unpack_from", side_effect=struct.error("invalid prefix")),
+    ):
+        await transport.connect()
+
+    assert transport.server_build == 0
+    assert transport.state is TransportState.READY
+    await transport.close()

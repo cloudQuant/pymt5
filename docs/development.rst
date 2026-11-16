@@ -59,7 +59,7 @@ Use the same commands as the Makefile and workflows:
 
    ruff check pymt5/ tests/
    python -m mypy pymt5/ --ignore-missing-imports
-   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin tests/ -v --tb=short
+   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin tests/ -m "not integration" -v --tb=short
 
 On shells that do not support inline environment assignments, set
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` in the process environment and run the same
@@ -74,7 +74,7 @@ For the CI coverage variant, explicitly load both plugins:
 
 .. code-block:: bash
 
-   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin -p pytest_cov.plugin tests/ -v --tb=short --cov=pymt5 --cov-report=term-missing
+   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin -p pytest_cov.plugin tests/ -m "not integration" -v --tb=short --cov=pymt5 --cov-report=term-missing --cov-fail-under=100
 
 ``make format`` runs ``ruff format pymt5/ tests/`` and rewrites files. Use it
 only when formatting changes are intended; it is not a read-only check. Ruff's
@@ -85,16 +85,39 @@ Tests are offline by default
 ----------------------------
 
 The default suite uses local fakes and binary fixtures; it needs no MT5 server
-or credentials. Tests marked ``integration`` are skipped unless
-``PYMT5_INTEGRATION`` is set. Default CI installs no live credentials and does
-not run a live-server acceptance job.
+or credentials. Full-suite Makefile, CI, and release commands explicitly use
+``-m "not integration"`` so an inherited environment variable cannot enable
+network access. CI enforces 100% statement coverage with
+``--cov-fail-under=100``. Optional dependencies and defensive cancellation
+branches are tested with controlled local fakes, not excluded from measurement.
 
 A manual integration run requires a separately authorized demo environment and
-``PYMT5_SERVER``, ``PYMT5_LOGIN``, and ``PYMT5_PASSWORD``.
-``PYMT5_TEST_SYMBOL`` can select an exact server symbol for the tick test. No
-ticks within 30 seconds causes a skip because the market may be closed, not a
-pass that validates tick parsing. Cleanup errors, including rejected
-unsubscribes, still matter.
+``PYMT5_SERVER``, ``PYMT5_LOGIN``, and ``PYMT5_PASSWORD``. Use an exact active
+symbol during its market hours:
+
+.. code-block:: bash
+
+   export PYMT5_INTEGRATION=1
+   export PYMT5_REQUIRE_TICK=1
+   export PYMT5_TEST_SYMBOL=EURUSD
+   export PYMT5_LOG_LEVEL=CRITICAL
+   python -m pytest tests/test_integration.py -v --tb=short
+
+The ten read-only tests cover bootstrap, login/logout, basic and full symbol
+metadata, account/terminal reads, positions/orders and trade history queries,
+recent H1 bars, heartbeat/health, real tick reception, and tick subscription
+state. They do not require nonempty private trade collections and never place,
+modify, or cancel a trade. Without ``PYMT5_REQUIRE_TICK=1``, no tick within 30
+seconds causes a local skip because the market may be closed; strict mode fails
+instead, because a skip does not validate tick parsing.
+
+Build 6320 rejects removal of the final tick subscription with ``code=1`` and
+continues streaming the retained symbol. The integration contract therefore
+accepts only two outcomes: a successful empty-set request clears local state;
+an exact ``code=1`` response raises ``ProtocolError`` and preserves the last
+confirmed set. Partial unsubscribe uses a control symbol, and connection close
+performs final cleanup. No automatic disconnect is presented as a successful
+non-destructive unsubscribe.
 
 Do not enable live tests in default CI, add real credentials to test files, or
 use live trading as a substitute for offline tests. Review :doc:`security`
@@ -170,6 +193,23 @@ and documentation:
 No live integration credentials are part of the default matrix. A green CI run
 therefore means the offline tests and static/package/documentation checks pass;
 it is not live broker certification.
+
+``.github/workflows/demo.yml`` is a separate read-only acceptance workflow. It
+runs at 01:00 and 13:00 UTC Monday–Friday and by manual dispatch; it never runs
+for pull requests and is not a release dependency. Scheduled jobs remain skipped
+until repository variable ``PYMT5_DEMO_ENABLED=1`` is set. Configure protected
+GitHub environment ``demo`` with secrets ``PYMT5_LOGIN`` and
+``PYMT5_PASSWORD``. Optional repository/environment variables
+``PYMT5_SERVER`` and ``PYMT5_TEST_SYMBOL`` default to the MetaQuotes Web
+endpoint and ``EURUSD``. The job sets ``PYMT5_REQUIRE_TICK=1`` and fails when no
+real tick arrives.
+
+Cron is a market-hours heuristic, not an exchange calendar. Maintainers must
+choose a symbol active at the run time, including for manual dispatch, and account
+for holidays and symbol-specific sessions. GitHub schedules workflows from the
+default branch; push the workflow and make it available on the applicable ref
+before expecting remote execution. A local workflow-equivalent command is not a
+GitHub Actions run and has no remote run ID.
 
 The GitHub Pages workflow runs on pushes to ``main`` or ``master`` and by manual
 dispatch. It builds the documentation, configures Pages, uploads

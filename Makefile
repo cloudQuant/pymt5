@@ -1,7 +1,7 @@
 .PHONY: test lint format docs typecheck package-check check
 
 test:
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin tests/ -v --tb=short
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin tests/ -m "not integration" -v --tb=short
 
 lint:
 	ruff check pymt5/ tests/

@@ -565,6 +565,36 @@ class TestTypedAccountHandler:
         assert received == []
 
 
+@pytest.mark.parametrize("kind", ["tick", "book", "trade_result", "account"])
+def test_typed_handlers_log_and_suppress_parse_errors(kind, monkeypatch, caplog):
+    mixin = _create_push_handlers_mixin()
+    callback = MagicMock()
+    caplog.set_level("ERROR", logger="pymt5.client")
+
+    if kind == "tick":
+        handler = mixin.on_tick_event(callback)
+        result = CommandResult(CMD_TICK_PUSH, 0, b"")
+        patcher = patch.object(mixin, "_parse_ticks", side_effect=ValueError("parse failure"))
+    elif kind == "book":
+        handler = mixin.on_book_event(callback)
+        result = CommandResult(CMD_BOOK_PUSH, 0, b"")
+        patcher = patch("pymt5._push_handlers._parse_book_entries", side_effect=ValueError("parse failure"))
+    elif kind == "trade_result":
+        handler = mixin.on_trade_result_event(callback)
+        result = CommandResult(CMD_TRADE_RESULT_PUSH, 0, _build_trade_result_push_body())
+        patcher = patch("pymt5._push_handlers.SeriesCodec.parse", side_effect=ValueError("parse failure"))
+    else:
+        handler = mixin.on_account_event(callback)
+        result = CommandResult(CMD_ACCOUNT_UPDATE_PUSH, 0, b"")
+        patcher = patch("pymt5._push_handlers._parse_account_response", side_effect=ValueError("parse failure"))
+
+    with patcher:
+        handler(result)
+
+    callback.assert_not_called()
+    assert f"typed {kind.replace('_', ' ')} event parse error: parse failure" in caplog.text
+
+
 # =====================================================================
 # Phase 16.2: Callback Error Isolation
 # =====================================================================

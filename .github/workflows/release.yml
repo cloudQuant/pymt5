@@ -46,7 +46,7 @@ jobs:
       - name: Run tests
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: python -m pytest -p pytest_asyncio.plugin tests/ -v --tb=short
+        run: python -m pytest -p pytest_asyncio.plugin tests/ -m "not integration" -v --tb=short
 
   quality:
     needs: validate-release

@@ -1,0 +1,71 @@
+name: Demo Acceptance
+
+on:
+  schedule:
+    - cron: "0 1,13 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: Exact active demo symbol
+        required: true
+        default: EURUSD
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-acceptance
+  cancel-in-progress: false
+
+jobs:
+  read-only-integration:
+    name: Read-only demo API acceptance
+    if: github.event_name == 'workflow_dispatch' || vars.PYMT5_DEMO_ENABLED == '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: demo
+    env:
+      PYMT5_SERVER: ${{ vars.PYMT5_SERVER || 'wss://web.metatrader.app/terminal' }}
+      PYMT5_LOGIN: ${{ secrets.PYMT5_LOGIN }}
+      PYMT5_PASSWORD: ${{ secrets.PYMT5_PASSWORD }}
+      PYMT5_TEST_SYMBOL: ${{ (github.event_name == 'workflow_dispatch' && inputs.symbol) || vars.PYMT5_TEST_SYMBOL || 'EURUSD' }}
+      PYMT5_INTEGRATION: "1"
+      PYMT5_REQUIRE_TICK: "1"
+      PYMT5_LOG_LEVEL: CRITICAL
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Validate demo configuration
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+
+          missing = [name for name in ("PYMT5_SERVER", "PYMT5_LOGIN", "PYMT5_PASSWORD") if not os.environ.get(name)]
+          if missing:
+              raise SystemExit("Missing demo configuration: " + ", ".join(missing))
+          try:
+              login = int(os.environ["PYMT5_LOGIN"])
+          except ValueError:
+              raise SystemExit("PYMT5_LOGIN must be an integer") from None
+          if login <= 0:
+              raise SystemExit("PYMT5_LOGIN must be a positive integer")
+          if not os.environ["PYMT5_TEST_SYMBOL"].strip():
+              raise SystemExit("PYMT5_TEST_SYMBOL must not be empty")
+          PY
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run read-only demo integration tests
+        run: python -m pytest -p pytest_asyncio.plugin tests/test_integration.py -v --tb=short

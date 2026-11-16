@@ -110,3 +110,19 @@ async def test_lingering_reconnect_cleanup_blocks_new_sessions_until_finished():
     await asyncio.wait_for(pending_close, timeout=1)
     await client.connect()
     client.transport.connect.assert_awaited_once()
+
+
+async def test_consume_reconnect_close_result_logs_late_failure(caplog):
+    client = MT5WebClient()
+
+    async def fail_close():
+        raise RuntimeError("late close")
+
+    task = asyncio.create_task(fail_close())
+    await asyncio.sleep(0)
+    caplog.set_level("WARNING", logger="pymt5.client")
+
+    client._consume_reconnect_close_result(task)
+
+    assert "failed to close reconnect transport" in caplog.text
+    assert "late close" in caplog.text

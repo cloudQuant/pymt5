@@ -54,7 +54,7 @@ Sphinx、Read the Docs 主题以及 autodoc 类型标注支持。发布包名仍
 
    ruff check pymt5/ tests/
    python -m mypy pymt5/ --ignore-missing-imports
-   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin tests/ -v --tb=short
+   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin tests/ -m "not integration" -v --tb=short
 
 对于不支持内联环境变量赋值的 shell，请在进程环境中设置
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1``，再运行相同的 ``python -m pytest`` 命令。
@@ -69,7 +69,7 @@ CI 覆盖率变体需要显式加载两个插件：
 
 .. code-block:: bash
 
-   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin -p pytest_cov.plugin tests/ -v --tb=short --cov=pymt5 --cov-report=term-missing
+   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_asyncio.plugin -p pytest_cov.plugin tests/ -m "not integration" -v --tb=short --cov=pymt5 --cov-report=term-missing --cov-fail-under=100
 
 ``make format`` 会执行 ``ruff format pymt5/ tests/`` 并重写文件。只在确需格式化
 变更时使用，它不是只读检查。Ruff 配置目标为 Python 3.11，行宽 120 个字符。不要让
@@ -78,14 +78,33 @@ CI 覆盖率变体需要显式加载两个插件：
 默认测试全部离线
 ----------------
 
-默认套件使用本地 fake 和二进制夹具，不需要 MT5 服务器或凭据。标记为
-``integration`` 的测试只有设置 ``PYMT5_INTEGRATION`` 后才会运行。默认 CI 不安装
-在线凭据，也不运行在线服务器验收任务。
+默认套件使用本地 fake 和二进制夹具，不需要 MT5 服务器或凭据。Makefile、CI
+和 release 的完整测试命令显式使用 ``-m "not integration"``，避免继承的环境
+变量意外启用网络访问。CI 通过 ``--cov-fail-under=100`` 强制执行 100% 语句
+覆盖率。可选依赖和防御性取消分支使用受控本地 fake 测试，不会从覆盖率统计中
+排除。
 
 手动 integration 运行需要单独授权的模拟环境，以及 ``PYMT5_SERVER``、
-``PYMT5_LOGIN`` 和 ``PYMT5_PASSWORD``。``PYMT5_TEST_SYMBOL`` 可以为 tick 测试
-选择准确的服务器品种。30 秒内没有 tick 会导致跳过，因为市场可能闭市；这不代表
-tick 解析验证通过。清理错误仍然重要，包括退订被拒绝。
+``PYMT5_LOGIN`` 和 ``PYMT5_PASSWORD``。请在准确品种的交易时段运行：
+
+.. code-block:: bash
+
+   export PYMT5_INTEGRATION=1
+   export PYMT5_REQUIRE_TICK=1
+   export PYMT5_TEST_SYMBOL=EURUSD
+   export PYMT5_LOG_LEVEL=CRITICAL
+   python -m pytest tests/test_integration.py -v --tb=short
+
+这十个只读测试覆盖 bootstrap、登录/登出、基本和完整 symbol 信息、账户和
+terminal 查询、持仓/订单和交易历史查询、近期 H1 K线、heartbeat/health、真实
+tick 接收以及 tick 订阅状态。测试不要求私有交易集合非空，绝不会下单、改单
+或撤单。未设置 ``PYMT5_REQUIRE_TICK=1`` 时，30 秒无 tick 会在本地跳过，因为
+市场可能闭市；严格模式会失败，因为跳过不能证明 tick 解析通过。
+
+build 6320 以 ``code=1`` 拒绝最后一个 tick 品种的退订，并继续推送保留品种的
+行情。integration 合同因此只接受两种结果：空集合请求成功时清空本地状态；明确的
+``code=1`` 响应抛出 ``ProtocolError`` 并保留最后确认集合。部分退订使用控制
+品种，最终清理由关闭连接完成。不会把自动断连伪装成非破坏性的全部退订成功。
 
 不要在默认 CI 中启用在线测试，不要把真实凭据加入测试文件，也不要用在线交易代替
 离线测试。任何手动在线运行前先阅读 :doc:`security`；除非某项变更状态的操作得到
@@ -147,6 +166,19 @@ CI workflow 分为测试、lint/类型检查、软件包构建和文档构建任
 
 默认矩阵不含在线 integration 凭据。因此，CI 全绿表示离线测试以及静态检查、软件包
 和文档检查通过，并不是实盘券商认证。
+
+``.github/workflows/demo.yml`` 是独立的只读验收 workflow，在周一至周五
+01:00、13:00 UTC 运行，也支持手动触发。它不会在 pull request 上运行，也不是
+release 依赖。只有设置仓库变量 ``PYMT5_DEMO_ENABLED=1`` 后，定时任务才会执行。
+请在受保护的 GitHub ``demo`` environment 中配置 secrets ``PYMT5_LOGIN`` 和
+``PYMT5_PASSWORD``。可选仓库/environment 变量 ``PYMT5_SERVER`` 和
+``PYMT5_TEST_SYMBOL`` 默认分别为 MetaQuotes Web 地址和 ``EURUSD``。任务设置
+``PYMT5_REQUIRE_TICK=1``，没有收到真实 tick 时会失败。
+
+cron 只是交易时段启发式配置，不是交易所日历。维护者必须确认品种在执行时有行情，
+手动触发也一样，并考虑假期和品种自身交易时段。GitHub 从默认分支执行定时
+workflow；必须先推送 workflow 并使其存在于相应 ref，才能期待远程执行。本地等效
+命令不是 GitHub Actions 运行，也没有远程 run ID。
 
 GitHub Pages workflow 在推送到 ``main`` 或 ``master`` 时运行，也可手动触发。它构建
 文档、配置 Pages、把 ``docs/_build/html`` 上传为 Pages artifact，并通过

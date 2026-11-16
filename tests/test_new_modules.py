@@ -313,6 +313,17 @@ class TestSubscriptionHandle:
 
 
 class TestToDataFrame:
+    def test_converts_records_with_stubbed_pandas(self):
+        from pymt5._dataframe import to_dataframe
+
+        records = [{"time": 1000, "close": 1.2}]
+        dataframe = MagicMock()
+        pandas = MagicMock()
+        pandas.DataFrame = MagicMock(return_value=dataframe)
+        with patch.dict("sys.modules", {"pandas": pandas}):
+            assert to_dataframe(records) is dataframe
+        pandas.DataFrame.assert_called_once_with(records)
+
     def test_converts_records_to_dataframe(self):
         pd = pytest.importorskip("pandas")
         from pymt5._dataframe import to_dataframe

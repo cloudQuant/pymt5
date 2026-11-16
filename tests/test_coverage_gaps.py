@@ -649,8 +649,9 @@ class TestTradeResponseParseFailure:
 
 
 class TestLoggingStructlogBranch:
-    def test_get_logger_with_structlog(self):
+    def test_get_logger_with_structlog(self, monkeypatch):
         """Cover line 32: return structlog.get_logger(name)"""
+        monkeypatch.delenv("PYMT5_LOG_LEVEL", raising=False)
         mock_structlog = MagicMock()
         mock_logger = MagicMock()
         mock_structlog.get_logger = MagicMock(return_value=mock_logger)

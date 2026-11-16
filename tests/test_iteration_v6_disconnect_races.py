@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from pymt5.constants import CMD_BOOTSTRAP, CMD_GET_ACCOUNT, CMD_TICK_PUSH
-from pymt5.exceptions import SessionError
-from pymt5.protocol import pack_outer
+from pymt5.exceptions import MT5ConnectionError, SessionError
+from pymt5.protocol import ResponseFrame, pack_outer
 from pymt5.transport import CommandResult, MT5WebSocketTransport, TransportState
 
 
@@ -266,3 +266,120 @@ async def test_old_frame_stops_dispatch_after_noncooperative_listener_and_reconn
             receive.cancel()
         await asyncio.gather(receive, return_exceptions=True)
         await transport.close()
+
+
+async def test_close_preserves_external_cancellation_while_recv_stops():
+    transport, socket = _ready_transport()
+    started = asyncio.Event()
+
+    async def receive():
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            close_task.cancel()
+            raise
+
+    transport._recv_task = asyncio.create_task(receive())
+    await started.wait()
+    close_task = asyncio.create_task(transport.close())
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(close_task, timeout=1)
+    assert transport.state is TransportState.DISCONNECTED
+    socket.close.assert_awaited_once()
+
+
+async def test_close_logs_socket_failure_after_receive_failure(caplog):
+    transport, socket = _ready_transport()
+    started = asyncio.Event()
+    socket.close.side_effect = OSError("socket second")
+
+    async def receive():
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("recv first") from None
+
+    transport._recv_task = asyncio.create_task(receive())
+    await started.wait()
+    caplog.set_level("WARNING", logger="pymt5.transport")
+
+    with pytest.raises(RuntimeError, match="recv first"):
+        await transport.close()
+    assert "websocket close failed during transport cleanup" in caplog.text
+    socket.close.assert_awaited_once()
+
+
+async def test_recv_loop_without_socket_records_disconnect():
+    transport = MT5WebSocketTransport("ws://offline.invalid")
+    notifications = []
+    transport._on_disconnect = lambda: notifications.append(True)
+    pending = asyncio.get_running_loop().create_future()
+    transport._pending[CMD_GET_ACCOUNT].append(pending)
+
+    await transport._recv_loop()
+
+    with pytest.raises(MT5ConnectionError, match="websocket not connected"):
+        pending.result()
+    assert notifications == [True]
+    assert transport.state is TransportState.ERROR
+
+
+@pytest.mark.parametrize("stage", ["initial", "metrics", "pending", "callback", "error_handler"])
+async def test_dispatch_stops_when_source_is_invalidated(stage):
+    transport, socket = _ready_transport()
+    generation = transport._generation
+    listener_calls = []
+    error_calls = []
+
+    def invalidate(*_args):
+        transport._generation_invalidated.set()
+
+    if stage == "initial":
+        invalidate()
+    if stage == "metrics":
+        transport._metrics = Mock()
+        transport._metrics.on_command_received.side_effect = invalidate
+
+    future = None
+    if stage == "pending":
+        future = Mock()
+        future.done.return_value = False
+        future.set_result.side_effect = invalidate
+        transport._pending[CMD_GET_ACCOUNT].append(future)
+
+    def first_listener(_result):
+        listener_calls.append("first")
+        if stage == "callback":
+            invalidate()
+            raise ValueError("callback failure")
+        if stage == "error_handler":
+            raise ValueError("callback failure")
+
+    def second_listener(_result):
+        listener_calls.append("second")
+
+    def first_error_handler(_exc, _callback):
+        error_calls.append("first")
+        if stage == "error_handler":
+            invalidate()
+
+    def second_error_handler(_exc, _callback):
+        error_calls.append("second")
+
+    transport._listeners[CMD_GET_ACCOUNT] = [first_listener, second_listener]  # type: ignore[assignment]
+    transport._callback_error_handlers = [first_error_handler, second_error_handler]
+
+    await transport._dispatch(
+        ResponseFrame(CMD_GET_ACCOUNT, 0, b""),
+        source_ws=socket,
+        source_generation=generation,
+    )
+
+    expected_listeners = ["first"] if stage in {"callback", "error_handler"} else []
+    assert listener_calls == expected_listeners
+    assert error_calls == (["first"] if stage == "error_handler" else [])
+    if future is not None:
+        future.set_result.assert_called_once()
