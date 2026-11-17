@@ -27,10 +27,23 @@ def get_logger(name: str) -> Any:
     structlog configuration. Invalid level names are ignored.
     """
     level = getattr(logging, _LOG_LEVEL.upper(), None) if _LOG_LEVEL is not None else None
+    stdlib_logger = logging.getLogger(name)
+    if isinstance(level, int) and not isinstance(level, bool):
+        stdlib_logger.setLevel(level)
     try:
         import structlog  # type: ignore[import-untyped]
 
-        if isinstance(level, int):
+        is_configured = getattr(structlog, "is_configured", None)
+        if callable(is_configured) and not is_configured() and hasattr(structlog, "stdlib"):
+            return structlog.wrap_logger(
+                stdlib_logger,
+                wrapper_class=structlog.stdlib.BoundLogger,
+                processors=[
+                    structlog.stdlib.PositionalArgumentsFormatter(),
+                    structlog.stdlib.render_to_log_kwargs,
+                ],
+            )
+        if isinstance(level, int) and not isinstance(level, bool):
             return structlog.wrap_logger(
                 None,
                 wrapper_class=structlog.make_filtering_bound_logger(level),
@@ -38,7 +51,4 @@ def get_logger(name: str) -> Any:
             )
         return structlog.get_logger(name)
     except ImportError:
-        logger = logging.getLogger(name)
-        if isinstance(level, int):
-            logger.setLevel(level)
-        return logger
+        return stdlib_logger

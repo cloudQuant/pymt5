@@ -187,9 +187,11 @@ class TestTokenBucketRateLimiter:
         await limiter.acquire()
         await limiter.acquire()
 
-    async def test_negative_rate_passes_immediately(self):
-        limiter = TokenBucketRateLimiter(rate=-5.0, burst=10)
-        await limiter.acquire()
+    async def test_negative_rate_raises_validation_error(self):
+        from pymt5.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="rate must be a finite number >= 0"):
+            TokenBucketRateLimiter(rate=-5.0, burst=10)
 
     async def test_burst_allows_initial_calls(self):
         limiter = TokenBucketRateLimiter(rate=100.0, burst=5)

@@ -1,9 +1,43 @@
 Changelog
 =========
 
-v1.1.0 (2026-11-14)
+v1.1.0 (2026-11-17)
 -------------------
 
+- Isolate asynchronous transport listener dispatch into a per-connection ordered
+  background queue so callbacks awaiting ``send_command()`` do not deadlock the
+  receive loop, route internal listener ``CancelledError`` and user callback
+  exceptions to ``on_callback_error``, bound ``close()`` cleanup, preserve external
+  cancellations during uncertain-send cleanup, and isolate all metrics and
+  disconnect callbacks.
+- Reject pure unsolicited push frames from completing pending command futures,
+  add structural response predicates for shared commands (such as ``cmd=4`` and
+  ``cmd=17``), validate outer protocol versions and bootstrap AES key lengths
+  (mapped to ``MT5ConnectionError``), reject negative/boolean ``propLength`` and
+  out-of-range offsets, and bridge unconfigured ``structlog`` to stdlib
+  ``logging`` at default ``WARNING`` level.
+- Serialize ``subscribe_book()`` and ``unsubscribe_book()`` with server response
+  code validation, clear full-symbol caches in ``invalidate_symbol_cache()``,
+  roll incremental partial tick updates forward within a batch, align
+  ``TradeResultEvent.order`` with ``trade_order``, support ``async def`` push
+  callbacks across all wrappers, and guard truncated account/trade frames.
+- Serialize ``init_session()``, cancel active reconnect loops on foreground
+  ``connect()``/``login()``, clear tick/book subscriptions on ``logout()`` and
+  ``close()``, support independent per-callback ``on_health_degraded()``
+  latency thresholds, catch/normalize ``WebSocketException``, clean up
+  invalidated ``connect()`` transports and cancelled ``MT5ConnectionPool``
+  connections, and validate server response codes for OTP, password-change, and
+  account-opening commands.
+- Enforce finite positive numbers and ``uint64`` bounds in trade and limiter
+  inputs, fix Stop-Limit reference-price validation, zero ``equity``/``margin_free``
+  preservation, ``order_calc_margin()`` failure propagation, ``history_deals_get(ticket=...)``
+  deal filtering, deterministic currency pair affix matching, ``OrderManager``
+  terminal-state monotonicity and ``order_state`` / ``TradeResult`` compatibility,
+  and align ``PositionRecord``, ``DealRecord``, and ``SymbolGroupRecord``
+  ``TypedDict`` keys with runtime schemas.
+- Redact credentials and PII from dataclass ``repr()`` outputs and live scripts,
+  harden GitHub Actions permissions/SHA pins and ``setuptools>=77.0`` build floor,
+  isolate subprocess coverage environments, and fix example/script defects.
 - Serialize requests sharing a command ID and isolate a connection after a
   timeout, cancellation, or send failure when sending may have begun. Late
   responses cannot complete later requests on that connection; the server-side

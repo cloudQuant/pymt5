@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pymt5._validation import validate_symbol_name, validate_volume
+from pymt5._validation import validate_price, validate_symbol_name, validate_volume
 from pymt5.constants import (
     ORDER_FILLING_FOK,
     ORDER_TIME_GTC,
@@ -34,6 +34,7 @@ from pymt5.exceptions import ValidationError
 
 if TYPE_CHECKING:
     from pymt5.types import RecordList, SymbolInfo, TradeResult
+
 
 class _OrderHelpersMixin:
     """Mixin providing order convenience methods for MT5WebClient.
@@ -123,6 +124,10 @@ class _OrderHelpersMixin:
         validate_symbol_name(symbol)
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING):
             validate_volume(volume)
+        if trade_action == TRADE_ACTION_PENDING:
+            validate_price(price, "price")
+            if trade_type in {ORDER_TYPE_BUY_STOP_LIMIT, ORDER_TYPE_SELL_STOP_LIMIT}:
+                validate_price(trigger_price, "trigger_price")
         d = self._resolve_digits(symbol, digits)
         return await self.trade_request(
             action_id=action_id,
@@ -472,6 +477,8 @@ class _OrderHelpersMixin:
         when the position or its direction cannot be determined or its symbol
         does not match.
         """
+        validate_symbol_name(symbol)
+        validate_volume(volume)
         if position_id <= 0:
             raise ValidationError(f"position_id must be > 0 to close a position, got {position_id}")
         d = self._resolve_digits(symbol, digits)
@@ -531,6 +538,7 @@ class _OrderHelpersMixin:
         This closes position_id using the opposite position position_by.
         Both positions must be for the same symbol but in opposite directions.
         """
+        validate_symbol_name(symbol)
         d = self._resolve_digits(symbol, digits)
         return await self.trade_request(
             trade_action=TRADE_ACTION_CLOSE_BY,
@@ -550,6 +558,7 @@ class _OrderHelpersMixin:
         tp: float = 0.0,
     ) -> TradeResult:
         """Modify stop-loss and take-profit of an open position."""
+        validate_symbol_name(symbol)
         return await self.trade_request(
             trade_action=TRADE_ACTION_SLTP,
             symbol=symbol,
@@ -570,6 +579,8 @@ class _OrderHelpersMixin:
         expiration: int = 0,
     ) -> TradeResult:
         """Modify a pending order's price, SL, TP, or expiration."""
+        validate_symbol_name(symbol)
+        validate_price(price)
         return await self.trade_request(
             trade_action=TRADE_ACTION_MODIFY,
             symbol=symbol,

@@ -256,8 +256,8 @@ async def test_old_frame_stops_dispatch_after_noncooperative_listener_and_reconn
         receive.cancel()
         await asyncio.wait_for(cancelled.wait(), 1)
         release.set()
-        old_socket.messages.put_nowait(None)
-        await asyncio.wait_for(receive, 1)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(receive, 1)
         assert delivered == []
         assert transport.is_ready
     finally:

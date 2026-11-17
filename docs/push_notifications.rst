@@ -129,10 +129,13 @@ the same limitation.
 Keep the receive loop responsive
 --------------------------------
 
-Callbacks run in the transport receive dispatch path. An asynchronous callback
-is awaited, so slow user work can delay later frames and command responses.
-Move expensive work to an application task and choose an explicit bounded-queue
-policy rather than growing memory without limit.
+Synchronous callbacks run directly on the receive dispatch path, while
+asynchronous callbacks are dispatched through an ordered per-connection
+background queue so awaiting ``send_command()`` inside an ``async def``
+listener does not deadlock the socket reader. Even with queued dispatch, slow
+work delays subsequent listener deliveries on that connection, so move expensive
+work to an application task and choose an explicit bounded-queue policy rather
+than growing memory without limit.
 
 .. code-block:: python
 
@@ -167,8 +170,12 @@ The library does not persist, replay, deduplicate, or acknowledge user events.
 Observe callback failures
 -------------------------
 
-The transport logs callback exceptions and invokes registered error observers.
-The observer receives the exception and the failing callback (often the
+The transport logs callback exceptions (including user ``KeyError``,
+``ValueError``, ``TypeError``, and internal ``asyncio.CancelledError``, which are
+isolated from binary parse error handling) and invokes registered error
+observers. All wrapped push registrations also support ``async def`` user
+callbacks, and ``TradeResultEvent.order`` reads the schema's ``trade_order``
+field. The observer receives the exception and the failing callback (often the
 internal wrapper).
 
 .. code-block:: python

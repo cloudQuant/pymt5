@@ -36,12 +36,12 @@
 
    asyncio.run(main())
 
-``get_positions_and_orders()`` 返回 ``{"positions": ..., "orders": ...}``。``get_positions()`` 和 ``get_orders()`` 分别选取其中一部分。``positions_get()`` 和 ``orders_get()`` 支持可选的 ``symbol``、``group`` 或 ``ticket`` 过滤条件。历史数据可通过 ``get_trade_history(from_ts, to_ts)``、``get_deals()``、``history_orders_get()`` 和 ``history_deals_get()`` 获取，并可按 group/ticket/position 过滤。计数辅助方法查询相同的数据。
+``get_positions_and_orders()`` 返回 ``{"positions": ..., "orders": ...}``。``get_positions()`` 和 ``get_orders()`` 分别选取其中一部分。``positions_get()`` 和 ``orders_get()`` 支持可选的 ``symbol``、``group`` 或 ``ticket`` 过滤条件。历史数据可通过 ``get_trade_history(from_ts, to_ts)``、``get_deals()``、``history_orders_get()`` 和 ``history_deals_get()`` 获取，并可按 group/ticket/position 过滤（``history_deals_get(ticket=...)`` 按成交票据字段 ``deal`` 匹配）。计数辅助方法查询相同的数据。传入交易辅助方法的交易量与价格在发送前会校验为 ``uint64`` 线格式范围内的有限正值。
 
 执行本地预检
 ------------
 
-``order_check(request)`` 执行本地兼容层验证和保证金估算。它会读取品种/账户数据，但不会提交交易，也不是服务器端验证 RPC。retcode 为零不能证明服务器会接受或成交订单。``order_calc_profit()`` 和 ``order_calc_margin()`` 同样使用尽力而为的本地公式和货币换算；它们可能返回 ``None`` 并设置 ``last_error()``。
+``order_check(request)`` 执行本地兼容层验证和保证金估算。它会读取品种/账户数据，但不会提交交易，也不是服务器端验证 RPC。retcode 为零不能证明服务器会接受或成交订单；但若 ``order_calc_margin()`` 无法计算保证金，``order_check()`` 会保留 ``last_error()`` 并返回非零错误 retcode，而不会返回成功。该方法还会保留显式的零值 ``equity``/``margin_free``，并用独立市价校验 Stop-Limit 触发价同时用挂单价格校验 SL/TP。``order_calc_profit()`` 和 ``order_calc_margin()`` 同样使用尽力而为的本地公式和货币换算；它们可能返回 ``None`` 并设置 ``last_error()``。
 
 .. code-block:: python
 
@@ -126,9 +126,9 @@
    closed = await client.close_position("EURUSD", position_id=123456, volume=0.01)
    cancelled = await client.cancel_pending_order(order=789012)
 
-``close_position()`` 要求持仓 ID 为正数。如果省略 ``order_type``，它会查询当前持仓并选择相反方向。如果查询失败、持仓不存在、方向未知，或者品种缺失或与请求品种不同，它会在发送交易之前抛出 ``ValidationError``。只有已经明确预期的平仓方向时，才应传入显式 ``order_type``。
+``close_position()`` 会在发起网络查询前先校验 ``symbol`` 与 ``volume``，并要求持仓 ID 为正数。如果省略 ``order_type``，它会查询当前持仓并选择相反方向。如果输入无效、查询失败、持仓不存在、方向未知，或者品种缺失或与请求品种不同，它会在发送交易之前抛出 ``ValidationError``。只有已经明确预期的平仓方向时，才应传入显式 ``order_type``。
 
-在服务器支持的情况下，``close_position_by(symbol, position_id, position_by)`` 请求对同一品种的反向持仓执行 close-by。``modify_pending_order()`` 修改挂单；``cancel_pending_order()`` 删除挂单。未经后续查询，这些方法都不保证账户已经达到预期状态。
+在服务器支持的情况下，``close_position_by(symbol, position_id, position_by)`` 请求对同一品种的反向持仓执行 close-by。``modify_position_sltp()``、``modify_pending_order()`` 与 ``close_position_by()`` 在发送前同样会校验 ``symbol``（修改挂单还会校验有限正价格）。``cancel_pending_order()`` 删除挂单。未经后续查询，这些方法都不保证账户已经达到预期状态。
 
 绝不盲目重试结果不确定的交易
 ----------------------------

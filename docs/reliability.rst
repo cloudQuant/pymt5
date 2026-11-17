@@ -27,8 +27,12 @@ transport therefore applies two protections:
    A late response therefore cannot be assigned to a subsequent request on the
    old connection.
 
-These protections do not distinguish an unsolicited push or duplicate response
-from an outstanding response with the same command ID. They also do not reveal
+These protections enforce two frame-correlation boundaries: pure unsolicited
+push commands (such as ``cmd=8``, ``10``, ``13``, ``14``, ``15``, ``19``, and
+``23``) never complete pending requests, and shared commands such as ``cmd=4``
+and ``cmd=17`` can apply structural response predicates. However, they still do
+not distinguish an unsolicited push or duplicate response from an outstanding
+response that passes the same command ID and structural check, nor do they reveal
 what the server executed. In particular, cmd=4 listeners can run for ordinary
 position/order query responses; see :doc:`push_notifications`.
 
@@ -110,11 +114,17 @@ reference during close/logout cleanup.
 
    asyncio.run(monitor())
 
-Reconnect uses exponential backoff with jitter, capped by
+Reconnection uses exponential backoff with jitter, capped by
 ``max_reconnect_delay``. It creates a fresh transport, migrates registered
 listeners, logs in again, restarts the heartbeat, and attempts to restore the
-last locally retained tick and book subscription sets. A successful socket
-connection does not mean every restoration step succeeded.
+last locally retained tick and book subscription sets. Foreground ``connect()``
+and ``login()`` calls cancel any active background reconnect loop first, and
+explicit ``logout()`` or ``close()`` clears retained credentials, local tick
+and book subscription sets, and caches so a later session does not inherit
+previous subscriptions. Transport ``WebSocketException`` errors are normalized
+to ``MT5ConnectionError`` and handled by reconnect, heartbeat, and health
+checks, and ``close()`` bounds receive-task, listener, and socket teardown. A
+successful socket connection does not mean every restoration step succeeded.
 
 Reconnection does **not** replay missed ticks, books, account events, query
 responses, or trades. Tick caches and cached tick history can contain gaps or
@@ -122,10 +132,11 @@ stale values. ``copy_ticks_*()`` reads only that local push history, not a
 server archive. Re-query required state after reconnect and use event/timestamp
 checks appropriate to the application.
 
-Tick subscription state deserves special care: nonzero subscribe/unsubscribe
-responses retain the last confirmed local set, but after timeout or
-cancellation that set is not proof of server state. Re-subscription is an
-attempt to restore the local desired set, not a reconciliation protocol.
+Tick and book subscription state deserves special care: nonzero
+subscribe/unsubscribe responses raise ``ProtocolError`` and retain the last
+confirmed local set (and book caches), but after timeout or cancellation that
+set is not proof of server state. Re-subscription is an attempt to restore the
+local desired set, not a reconciliation protocol.
 
 Check health without treating it as proof
 -----------------------------------------

@@ -131,13 +131,19 @@ Full settings and environment variables are in the
 - A trade timeout or cancellation leaves server execution **unknown**. Reconcile
   orders, deals, and positions before any retry; never assume the trade failed
   to execute. Automatic reconnection does not retry it.
-- Same-command requests are serialized. After a timeout, cancellation, or send
+- Same-command requests are serialized and pure unsolicited push frames never
+  complete pending command futures. After a timeout, cancellation, or send
   failure where sending may have occurred, the old connection is isolated so a
   late response cannot be assigned to a subsequent request on that connection.
-  This does not identify every unsolicited push or duplicate response.
-- Nonzero tick subscription/unsubscription responses raise `ProtocolError` and
-  preserve the last confirmed local subscription set. A build 6320 demo sample
-  rejected removal of all tick subscriptions; cleanup rejection is not success.
+  This still does not distinguish every duplicate response or push sharing a
+  command ID.
+- Nonzero tick and order-book subscription/unsubscription responses raise
+  `ProtocolError` and preserve the last confirmed local subscription set (and
+  book caches). Explicit `logout()` or `close()` clears retained local
+  subscription state. A build 6320 demo sample rejected removal of all tick
+  subscriptions; cleanup rejection is not success.
+- Volume, price, ``heartbeat_interval``, and ``rate_limit``/``rate_burst`` inputs
+  are validated as finite values within supported bounds before sending.
 - Tick `auto` price normalization remains a compatibility heuristic. Validate
   raw and scaled values against the target server before using them in decisions.
 - Ordinary `get_positions_and_orders()` responses also invoke cmd=4 callbacks;

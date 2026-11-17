@@ -1,9 +1,35 @@
 更新日志
 ========
 
-v1.1.0 (2026-11-14)
+v1.1.0 (2026-11-17)
 -------------------
 
+- 将异步传输层监听器分派隔离到按连接有序的后台队列中，避免在回调内调用
+  ``send_command()`` 导致接收循环死锁；将监听器内部 ``CancelledError`` 与用户
+  回调异常统一路由至 ``on_callback_error``；为 ``close()`` 清理设置超时边界；
+  在不确定发送清理期间保留外部取消信号；并隔离全部指标和断连回调异常。
+- 禁止纯主动推送帧完成挂起请求 future，为共享命令（如 ``cmd=4``、``cmd=17``）
+  提供结构校验谓词；校验外层协议版本与引导 AES 密钥长度（异常映射为
+  ``MT5ConnectionError``）；拒绝负数/布尔型 ``propLength`` 与越界偏移；并在未配置
+  ``structlog`` 时将其桥接至标准库 ``logging``（默认 ``WARNING`` 级别）。
+- 为 ``subscribe_book()`` 与 ``unsubscribe_book()`` 加锁串行化并校验服务端返回码；
+  在 ``invalidate_symbol_cache()`` 中同步清空完整品种缓存；支持单批多条增量
+  tick 价格滚动合并；将 ``TradeResultEvent.order`` 对齐到 ``trade_order`` 字段；
+  在所有推送包装器中支持 ``async def`` 回调；并为截断的账户/交易帧提供边界保护。
+- 为 ``init_session()`` 加锁与代际校验；在前台 ``connect()`` / ``login()`` 时取消
+  活动重连循环；在 ``logout()`` 与 ``close()`` 时清空本地报价/深度订阅集合及缓存；
+  支持 ``on_health_degraded()`` 独立每回调延迟阈值；统一捕获并封装
+  ``WebSocketException``；回收失效 ``connect()`` 传输连接与取消中的
+  ``MT5ConnectionPool`` 客户端；并校验 OTP、改密及开户/验证命令的服务端返回码。
+- 对交易量、价格、限流器与心跳间隔强制执行有限正数及 ``uint64`` 上界校验；修复
+  Stop-Limit 挂单参考价校验、零净值/零可用保证金保留、``order_calc_margin()`` 失败
+  传播及 ``history_deals_get(ticket=...)`` 按成交票据过滤；支持确定性券商货币符号
+  前后缀匹配；强化 ``OrderManager`` 终态单调性与 ``order_state`` / ``TradeResult``
+  兼容；并将 ``PositionRecord``、``DealRecord``、``SymbolGroupRecord`` 的
+  ``TypedDict`` 键与运行期 schema 对齐。
+- 对数据类 ``repr()`` 与实盘脚本日志中的凭据及个人隐私字段执行脱敏；收紧 GitHub
+  Actions 权限作用域、固定发布 Action SHA 并升级 ``setuptools>=77.0`` 构建下限；
+  隔离测试子进程覆盖率环境变量；并修复示例与实盘脚本缺陷。
 - 串行执行共享同一命令 ID 的请求；当请求可能已经发送时，超时、取消或发送失败会触发连接隔离，
   防止迟到响应完成该连接上的后续请求。被中断交易的服务器端结果仍然未知，必须先核对再决定后续操作。
 - 加固重连、关闭、断连回调和订阅恢复的生命周期处理，并扩充连接代际与断连竞态的离线回归测试。

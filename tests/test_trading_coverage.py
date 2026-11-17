@@ -790,7 +790,7 @@ async def test_history_deals_get_by_group():
 
 
 async def test_history_deals_get_by_ticket():
-    """Test history_deals_get filtered by ticket."""
+    """Test history_deals_get filtered by deal ticket."""
     client = _make_client()
     deal_body = _build_deal_body(
         [
@@ -803,8 +803,9 @@ async def test_history_deals_get_by_ticket():
     client.transport.send_command = AsyncMock(
         return_value=CommandResult(command=CMD_GET_TRADE_HISTORY, code=0, body=combined)
     )
-    result = await client.history_deals_get(ticket=200)
+    result = await client.history_deals_get(ticket=2)
     assert len(result) == 1
+    assert result[0]["deal"] == 2
     assert result[0]["trade_order"] == 200
 
 
@@ -1597,17 +1598,20 @@ async def test_resolve_order_check_price_pending():
 
 
 async def test_resolve_order_check_price_pending_stop_limit():
-    """Test _resolve_order_check_price for stop-limit pending returns price_trigger."""
+    """Test _resolve_order_check_price for buy stop-limit resolves ask or falls back to price_order."""
     client = _make_client()
     info = _mock_symbol_info_record()
     request = {
         "action": TRADE_ACTION_PENDING,
+        "symbol": "EURUSD",
         "type": ORDER_TYPE_BUY_STOP_LIMIT,
         "price_order": 1.09,
         "price_trigger": 1.10,
     }
-    result = await client._resolve_order_check_price(request, info)
-    assert result == 1.10
+    client.symbol_info_tick = MagicMock(return_value={"ask": 1.11, "bid": 1.10})
+    assert await client._resolve_order_check_price(request, info) == 1.11
+    client.symbol_info_tick = MagicMock(return_value=None)
+    assert await client._resolve_order_check_price(request, info) == 1.09
 
 
 async def test_resolve_order_check_price_deal_with_price():
@@ -2262,7 +2266,7 @@ async def test_validate_pending_valid_with_price():
 
 
 async def test_estimate_order_margin_calc_returns_none():
-    """Test _estimate_order_margin returns 0.0 when calc returns None."""
+    """Test _estimate_order_margin propagates None when calc returns None."""
     client = _make_client()
     info = _mock_symbol_info_record()
     client.symbol_info = AsyncMock(return_value=info)
@@ -2275,21 +2279,24 @@ async def test_estimate_order_margin_calc_returns_none():
         "price_order": 1.1,
     }
     result = await client._estimate_order_margin(request)
-    assert result == 0.0
+    assert result is None
 
 
 async def test_resolve_order_check_price_pending_sell_stop_limit():
-    """Test _resolve_order_check_price for sell stop-limit uses trigger."""
+    """Test _resolve_order_check_price for sell stop-limit resolves bid or falls back to price_order."""
     client = _make_client()
     info = _mock_symbol_info_record()
     request = {
         "action": TRADE_ACTION_PENDING,
+        "symbol": "EURUSD",
         "type": ORDER_TYPE_SELL_STOP_LIMIT,
         "price_order": 1.11,
         "price_trigger": 1.10,
     }
-    result = await client._resolve_order_check_price(request, info)
-    assert result == 1.10
+    client.symbol_info_tick = MagicMock(return_value={"ask": 1.12, "bid": 1.10})
+    assert await client._resolve_order_check_price(request, info) == 1.10
+    client.symbol_info_tick = MagicMock(return_value=None)
+    assert await client._resolve_order_check_price(request, info) == 1.11
 
 
 async def test_history_deals_get_no_filter():

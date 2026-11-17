@@ -100,8 +100,8 @@ class OpenAccountResult:
 
     code: int
     login: int
-    password: str
-    investor_password: str
+    password: str = field(repr=False)
+    investor_password: str = field(repr=False)
 
     @property
     def success(self) -> bool:
@@ -113,10 +113,10 @@ class OpenAccountResult:
 class AccountOpeningRequest:
     """Shared fields used by the Web Terminal's account opening payloads."""
 
-    first_name: str
-    second_name: str
-    email: str = ""
-    phone: str = ""
+    first_name: str = field(repr=False)
+    second_name: str = field(repr=False)
+    email: str = field(default="", repr=False)
+    phone: str = field(default="", repr=False)
     group: str = ""
     deposit: float = 100000.0
     leverage: int = 100
@@ -124,12 +124,12 @@ class AccountOpeningRequest:
     country: str = ""
     city: str = ""
     state: str = ""
-    zipcode: str = ""
-    address: str = ""
+    zipcode: str = field(default="", repr=False)
+    address: str = field(default="", repr=False)
     domain: str = ""
-    phone_password: str = ""
-    email_confirm_code: int = 0
-    phone_confirm_code: int = 0
+    phone_password: str = field(default="", repr=False)
+    email_confirm_code: int = field(default=0, repr=False)
+    phone_confirm_code: int = field(default=0, repr=False)
     language: str = ""
     utm_campaign: str = ""
     utm_source: str = ""
@@ -149,10 +149,10 @@ class AccountDocument:
 
     data_type: int
     document_type: int
-    front_name: str
-    front_buffer: bytes
-    back_name: str = ""
-    back_buffer: bytes = b""
+    front_name: str = field(repr=False)
+    front_buffer: bytes = field(repr=False)
+    back_name: str = field(default="", repr=False)
+    back_buffer: bytes = field(default=b"", repr=False)
 
 
 @dataclass
@@ -163,11 +163,11 @@ class RealAccountRequest(AccountOpeningRequest):
     ``propType=9`` date encoding.
     """
 
-    middle_name: str = ""
-    birth_date_ms: int = 0
+    middle_name: str = field(default="", repr=False)
+    birth_date_ms: int = field(default=0, repr=False)
     gender: int = 0
-    citizenship: str = ""
-    tax_id: str = ""
+    citizenship: str = field(default="", repr=False)
+    tax_id: str = field(default="", repr=False)
     employment: int = 0
     industry: int = 0
     education: int = 0
@@ -179,7 +179,7 @@ class RealAccountRequest(AccountOpeningRequest):
     experience_cfd: int = 0
     experience_futures: int = 0
     experience_stocks: int = 0
-    documents: list[AccountDocument] = field(default_factory=list)
+    documents: list[AccountDocument] = field(default_factory=list, repr=False)
 
 
 # ---- Schemas that are local to client logic ----
@@ -229,11 +229,12 @@ class TickRecord(TypedDict, total=False):
 
     symbol_id: int
     tick_time: int
-    time_ms_delta: int
+    fields: int
     bid: float
     ask: float
     last: float
     tick_volume: int
+    time_ms_delta: int
     flags: int
     tick_time_ms: int
     symbol: str
@@ -256,45 +257,99 @@ class PositionRecord(TypedDict, total=False):
     """Open position data."""
 
     position_id: int
+    trade_order: int
+    time_create: int
+    time_update: int
     trade_symbol: str
     trade_action: int
-    volume: int
     price_open: float
-    price_current: float
-    price_sl: float
-    price_tp: float
+    price_close: float
+    sl: float
+    tp: float
+    trade_volume: int
     profit: float
+    rate_profit: float
+    rate_margin: float
     commission: float
     storage: float
+    expert: int
+    expert_position_id: int
+    comment: str
+    contract_size: float
+    digits: int
+    digits_currency: int
+    trade_reason: int
+    external_id: str
+    time_create_ms: int
+    time_update_ms: int
 
 
 class OrderRecord(TypedDict, total=False):
     """Pending order data."""
 
     trade_order: int
+    order_id: str
     trade_symbol: str
+    time_setup: int
+    time_expiration: int
+    time_done: int
     order_type: int
-    volume_initial: int
-    volume_current: int
+    type_filling: int
+    type_time: int
+    type_reason: int
     price_order: float
     price_trigger: float
+    price_current: float
     price_sl: float
     price_tp: float
+    volume_initial: int
+    volume_current: int
+    order_state: int
+    expert: int
+    position_id: int
+    comment: str
+    contract_size: float
+    digits: int
+    digits_currency: int
+    commission_daily: float
+    commission_monthly: float
+    margin_rate: float
+    activation_mode: int
+    time_setup_ms: int
+    time_done_ms: int
 
 
 class DealRecord(TypedDict, total=False):
     """Historical deal/trade data."""
 
+    deal: int
+    deal_id: str
     trade_order: int
-    trade_symbol: str
-    deal_action: int
-    volume: int
-    price: float
-    profit: float
-    commission: float
-    storage: float
     time_create: int
     time_update: int
+    trade_symbol: str
+    trade_action: int
+    entry: int
+    price_open: float
+    price_close: float
+    sl: float
+    tp: float
+    trade_volume: int
+    profit: float
+    rate_profit: float
+    rate_margin: float
+    commission: float
+    storage: float
+    expert: int
+    position_id: int
+    comment: str
+    contract_size: float
+    digits: int
+    digits_currency: int
+    trade_reason: int
+    time_create_ms: int
+    time_update_ms: int
+    commission_fee: float
 
 
 class BookLevelRecord(TypedDict, total=False):
@@ -307,4 +362,4 @@ class BookLevelRecord(TypedDict, total=False):
 class SymbolGroupRecord(TypedDict, total=False):
     """Symbol group name."""
 
-    name: str
+    group_name: str

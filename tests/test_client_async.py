@@ -475,14 +475,14 @@ async def test_history_deals_get_group_and_ticket_filters():
     client = MT5WebClient()
     client.get_deals = AsyncMock(
         return_value=[
-            {"trade_order": 1, "position_id": 11, "trade_symbol": "EURUSD"},
-            {"trade_order": 2, "position_id": 22, "trade_symbol": "USDJPY"},
-            {"trade_order": 2, "position_id": 33, "trade_symbol": "XAUUSD"},
+            {"deal": 1, "trade_order": 2, "position_id": 11, "trade_symbol": "EURUSD"},
+            {"deal": 2, "trade_order": 9, "position_id": 22, "trade_symbol": "USDJPY"},
+            {"deal": 2, "trade_order": 9, "position_id": 33, "trade_symbol": "XAUUSD"},
         ]
     )
 
     result = await client.history_deals_get(group="*USD*,!*JPY*", ticket=2)
-    assert result == [{"trade_order": 2, "position_id": 33, "trade_symbol": "XAUUSD"}]
+    assert result == [{"deal": 2, "trade_order": 9, "position_id": 33, "trade_symbol": "XAUUSD"}]
 
 
 async def test_copy_rates_wrappers():

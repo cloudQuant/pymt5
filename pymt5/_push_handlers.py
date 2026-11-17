@@ -7,12 +7,19 @@ updates, login status, book updates, and trade results.
 
 from __future__ import annotations
 
+import inspect
 import struct
 from collections import deque
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from collections.abc import Awaitable, Callable, Generator
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from pymt5._parsers import _parse_account_response, _parse_book_entries, _parse_counted_records, _parse_tick_batch
+from pymt5._parsers import (
+    _extract_tick_wire_presence,
+    _parse_account_response,
+    _parse_book_entries,
+    _parse_counted_records,
+    _parse_tick_batch,
+)
 from pymt5.constants import (
     CMD_ACCOUNT_UPDATE_PUSH,
     CMD_BOOK_PUSH,
@@ -59,6 +66,94 @@ logger = get_logger("pymt5.client")
 
 # Specific exceptions for push handler parsing failures
 _PARSE_ERRORS = (struct.error, KeyError, ValueError, TypeError, IndexError)
+_EventT = TypeVar("_EventT")
+
+
+class _SequentialAsyncCallbacks(Generic[_EventT]):
+    """Awaitable sequence that closes an unstarted first awaitable if discarded."""
+
+    def __init__(
+        self,
+        first: Awaitable[Any],
+        callback: Callable[[_EventT], Any],
+        rest: list[_EventT],
+    ) -> None:
+        self._first = first
+        self._callback = callback
+        self._rest = rest
+        self._started = False
+
+    def close(self) -> None:
+        """Close the eagerly created first awaitable if never awaited."""
+        if not self._started:
+            self._started = True
+            close = getattr(self._first, "close", None)
+            if callable(close):
+                close()
+
+    def __await__(self) -> Generator[Any, None, None]:
+        return self._run().__await__()
+
+    async def _run(self) -> None:
+        self._started = True
+        await self._first
+        for item in self._rest:
+            next_maybe = self._callback(item)
+            if inspect.isawaitable(next_maybe):
+                await next_maybe
+
+
+def _dispatch_event_list(callback: Callable[[_EventT], Any], events: list[_EventT]) -> Awaitable[None] | None:
+    """Invoke ``callback`` for each event, switching to async sequential awaiting if needed."""
+    for idx, event in enumerate(events):
+        maybe = callback(event)
+        if inspect.isawaitable(maybe):
+            return _SequentialAsyncCallbacks(maybe, callback, events[idx + 1 :])
+    return None
+
+
+def _parse_optional_counted_segment(
+    body: bytes,
+    offset: int,
+    schema: list[dict[str, int]],
+    field_names: list[str],
+    segment_name: str,
+) -> tuple[RecordList, int] | None:
+    """Parse an optional counted array segment, returning ``None`` if truncated."""
+    if offset >= len(body):
+        return [], offset
+    if len(body) - offset < 4:
+        logger.error("trade transaction push parse error: truncated %s header", segment_name)
+        return None
+    count = struct.unpack_from("<I", body, offset)[0]
+    record_size = get_series_size(schema)
+    if offset + 4 + count * record_size > len(body):
+        logger.error("trade transaction push parse error: truncated %s payload", segment_name)
+        return None
+    records = _parse_counted_records(body[offset:], schema, field_names)
+    return records, offset + 4 + count * record_size
+
+
+def _parse_trade_result_payload(body: bytes) -> dict[str, Any]:
+    """Parse action and optional response sections from a ``cmd=19`` push body."""
+    action_size = get_series_size(TRADE_RESULT_PUSH_SCHEMA)
+    resp_size = get_series_size(TRADE_RESULT_RESPONSE_SCHEMA)
+    data: dict[str, Any] = {}
+    if len(body) >= action_size:
+        vals = SeriesCodec.parse(body, TRADE_RESULT_PUSH_SCHEMA)
+        data.update(zip(TRADE_RESULT_PUSH_FIELD_NAMES, vals))
+    if len(body) >= action_size + resp_size:
+        resp_vals = SeriesCodec.parse_at(body, TRADE_RESULT_RESPONSE_SCHEMA, action_size)
+        data["result"] = dict(zip(TRADE_RESULT_RESPONSE_FIELD_NAMES, resp_vals))
+    return data
+
+
+def _parse_orders_after_positions(body: bytes) -> RecordList:
+    """Parse the orders section that follows positions in a ``cmd=4`` frame."""
+    pos_size = get_series_size(POSITION_SCHEMA)
+    pos_count = struct.unpack_from("<I", body, 0)[0] if body else 0
+    order_offset = 4 + pos_count * pos_size
+    return _parse_counted_records(body[order_offset:], ORDER_SCHEMA, ORDER_FIELD_NAMES)
 
 
 class _PushHandlersMixin:
@@ -117,13 +212,13 @@ class _PushHandlersMixin:
             report_auto_decision,
         )
 
-    def on_tick(self, callback: Callable[[RecordList], None]) -> Callable:
+    def on_tick(self, callback: Callable[[RecordList], Awaitable[None] | None]) -> Callable:
         """Register a callback for decoded tick batches.
 
         Args:
-            callback: Callable invoked with the list of ticks decoded from each
-                tick command frame. Parsing failures are logged and are not
-                propagated to the transport dispatch loop.
+            callback: Callable (sync or async) invoked with the list of ticks
+                decoded from each tick command frame. Parsing failures are
+                logged and are not propagated to the transport dispatch loop.
 
         Returns:
             The internal transport handler, suitable for passing to
@@ -131,16 +226,18 @@ class _PushHandlersMixin:
 
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
-                callback(self._parse_ticks(result.body))
+                ticks = self._parse_ticks(result.body)
             except _PARSE_ERRORS as exc:
                 logger.error("tick parse error: %s", exc)
+                return None
+            return callback(ticks)
 
         self.transport.on(CMD_TICK_PUSH, _handler)
         return _handler
 
-    def on_position_update(self, callback: Callable[[RecordList], None]) -> Callable:
+    def on_position_update(self, callback: Callable[[RecordList], Awaitable[None] | None]) -> Callable:
         """Register a callback for position records from cmd=4 frames.
 
         Ordinary position/order query responses also invoke this callback.
@@ -149,18 +246,18 @@ class _PushHandlersMixin:
         for use with transport.off().
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
-                body = result.body
-                positions = _parse_counted_records(body, POSITION_SCHEMA, POSITION_FIELD_NAMES)
-                callback(positions)
+                positions = _parse_counted_records(result.body, POSITION_SCHEMA, POSITION_FIELD_NAMES)
             except _PARSE_ERRORS as exc:
                 logger.error("position update parse error: %s", exc)
+                return None
+            return callback(positions)
 
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
         return _handler
 
-    def on_order_update(self, callback: Callable[[RecordList], None]) -> Callable:
+    def on_order_update(self, callback: Callable[[RecordList], Awaitable[None] | None]) -> Callable:
         """Register a callback for order records from cmd=4 frames.
 
         Ordinary position/order query responses also invoke this callback.
@@ -169,21 +266,18 @@ class _PushHandlersMixin:
         for use with transport.off().
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
-                body = result.body
-                pos_size = get_series_size(POSITION_SCHEMA)
-                pos_count = struct.unpack_from("<I", body, 0)[0] if body else 0
-                order_offset = 4 + pos_count * pos_size
-                orders = _parse_counted_records(body[order_offset:], ORDER_SCHEMA, ORDER_FIELD_NAMES)
-                callback(orders)
+                orders = _parse_orders_after_positions(result.body)
             except _PARSE_ERRORS as exc:
                 logger.error("order update parse error: %s", exc)
+                return None
+            return callback(orders)
 
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
         return _handler
 
-    def on_trade_update(self, callback: Callable[[dict[str, RecordList]], None]) -> Callable:
+    def on_trade_update(self, callback: Callable[[dict[str, RecordList]], Awaitable[None] | None]) -> Callable:
         """Register a callback for combined position/order cmd=4 frames.
 
         The callback receives a dict with ``positions`` and ``orders`` and is
@@ -193,22 +287,20 @@ class _PushHandlersMixin:
         with transport.off().
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
                 body = result.body
                 positions = _parse_counted_records(body, POSITION_SCHEMA, POSITION_FIELD_NAMES)
-                pos_size = get_series_size(POSITION_SCHEMA)
-                pos_count = struct.unpack_from("<I", body, 0)[0] if body else 0
-                order_offset = 4 + pos_count * pos_size
-                orders = _parse_counted_records(body[order_offset:], ORDER_SCHEMA, ORDER_FIELD_NAMES)
-                callback({"positions": positions, "orders": orders})
+                orders = _parse_orders_after_positions(body)
             except _PARSE_ERRORS as exc:
                 logger.error("trade update parse error: %s", exc)
+                return None
+            return callback({"positions": positions, "orders": orders})
 
         self.transport.on(CMD_GET_POSITIONS_ORDERS, _handler)
         return _handler
 
-    def on_symbol_update(self, callback: Callable[[CommandResult], None]) -> Callable:
+    def on_symbol_update(self, callback: Callable[[CommandResult], Awaitable[None] | None]) -> Callable:
         """Register callback for symbol update push notifications (cmd=13).
 
         The server pushes symbol changes (e.g. spread updates, trading hours).
@@ -218,7 +310,7 @@ class _PushHandlersMixin:
         self.transport.on(CMD_SYMBOL_UPDATE_PUSH, callback)
         return callback
 
-    def on_account_update(self, callback: Callable[[Record], None]) -> Callable:
+    def on_account_update(self, callback: Callable[[Record], Awaitable[None] | None]) -> Callable:
         """Register callback for account update push notifications (cmd=14).
 
         Server pushes account balance/margin/equity changes in real-time.
@@ -226,17 +318,18 @@ class _PushHandlersMixin:
         Returns the internal handler for use with transport.off().
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
                 data = _parse_account_response(result.body)
-                callback(data)
             except _PARSE_ERRORS as exc:
                 logger.error("account update parse error: %s", exc)
+                return None
+            return callback(data)
 
         self.transport.on(CMD_ACCOUNT_UPDATE_PUSH, _handler)
         return _handler
 
-    def on_login_status(self, callback: Callable[[CommandResult], None]) -> Callable:
+    def on_login_status(self, callback: Callable[[CommandResult], Awaitable[None] | None]) -> Callable:
         """Register callback for login status push notifications (cmd=15).
 
         The server may push login status changes (e.g. forced logout, session expiry).
@@ -245,7 +338,7 @@ class _PushHandlersMixin:
         self.transport.on(CMD_LOGIN_STATUS_PUSH, callback)
         return callback
 
-    def on_symbol_details(self, callback: Callable[[RecordList], None]) -> Callable:
+    def on_symbol_details(self, callback: Callable[[RecordList], Awaitable[None] | None]) -> Callable:
         """Register callback for extended symbol quote data (cmd=17).
 
         Build 6320 prices are raw wire values: divide by 10 ** symbol digits
@@ -253,7 +346,8 @@ class _PushHandlersMixin:
         must not be interpreted as a current quote. Other builds use the legacy
         layout and are not asserted to match build 6320.
         """
-        def _handler(result: CommandResult) -> None:
+
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
                 build_6320 = self.transport.server_build == 6320
                 schema = SYMBOL_DETAILS_6320_SCHEMA if build_6320 else SYMBOL_DETAILS_SCHEMA
@@ -261,7 +355,7 @@ class _PushHandlersMixin:
                 detail_size = get_series_size(schema)
                 if build_6320 and len(result.body) % detail_size:
                     logger.error("symbol details body length is not a multiple of %d", detail_size)
-                    return
+                    return None
                 count = len(result.body) // detail_size
                 details = []
                 offset = 0
@@ -275,40 +369,33 @@ class _PushHandlersMixin:
                         d["symbol"] = sym_info.name
                     details.append(d)
                     offset += detail_size
-                callback(details)
             except _PARSE_ERRORS as exc:
                 logger.error("symbol details parse error: %s", exc)
+                return None
+            return callback(details)
 
         self.transport.on(CMD_SYMBOL_DETAILS_PUSH, _handler)
         return _handler
 
-    def on_trade_result(self, callback: Callable[[Record], None]) -> Callable:
+    def on_trade_result(self, callback: Callable[[Record], Awaitable[None] | None]) -> Callable:
         """Register callback for async trade execution results (cmd=19).
 
         Server pushes trade results asynchronously. Callback receives a dict
         with trade action details and execution result (retcode, order, price, etc.).
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
-                body = result.body
-                action_size = get_series_size(TRADE_RESULT_PUSH_SCHEMA)
-                resp_size = get_series_size(TRADE_RESULT_RESPONSE_SCHEMA)
-                data: dict[str, Any] = {}
-                if len(body) >= action_size:
-                    vals = SeriesCodec.parse(body, TRADE_RESULT_PUSH_SCHEMA)
-                    data.update(zip(TRADE_RESULT_PUSH_FIELD_NAMES, vals))
-                if len(body) >= action_size + resp_size:
-                    resp_vals = SeriesCodec.parse_at(body, TRADE_RESULT_RESPONSE_SCHEMA, action_size)
-                    data["result"] = dict(zip(TRADE_RESULT_RESPONSE_FIELD_NAMES, resp_vals))
-                callback(data)
+                data = _parse_trade_result_payload(result.body)
             except _PARSE_ERRORS as exc:
                 logger.error("trade result push parse error: %s", exc)
+                return None
+            return callback(data)
 
         self.transport.on(CMD_TRADE_RESULT_PUSH, _handler)
         return _handler
 
-    def on_trade_transaction(self, callback: Callable[[Record], None]) -> Callable:
+    def on_trade_transaction(self, callback: Callable[[Record], Awaitable[None] | None]) -> Callable:
         """Register callback for cmd=10 trade transaction frames.
 
         Build 6320 Web Terminal listens for trade state changes on cmd=10;
@@ -322,26 +409,32 @@ class _PushHandlersMixin:
         - For transactions: 'flag_mask', 'transaction_id', 'transaction_type', 'order'
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
                 body = result.body
                 if len(body) < 4:
-                    return
+                    return None
                 update_type = struct.unpack_from("<I", body, 0)[0]
                 data: dict[str, Any] = {"update_type": update_type}
                 if update_type == 2:
                     offset = 4
                     balance_size = get_series_size(TRADE_UPDATE_BALANCE_SCHEMA)
-                    if len(body) >= offset + balance_size:
-                        vals = SeriesCodec.parse_at(body, TRADE_UPDATE_BALANCE_SCHEMA, offset)
-                        data["balance_info"] = dict(zip(TRADE_UPDATE_BALANCE_FIELD_NAMES, vals))
-                        offset += balance_size
-                    data["deals"] = _parse_counted_records(body[offset:], DEAL_SCHEMA, DEAL_FIELD_NAMES)
-                    deal_size = get_series_size(DEAL_SCHEMA)
-                    if len(body) > offset and len(body[offset:]) >= 4:
-                        deal_count = struct.unpack_from("<I", body, offset)[0]
-                        offset += 4 + deal_count * deal_size
-                    data["positions"] = _parse_counted_records(body[offset:], POSITION_SCHEMA, POSITION_FIELD_NAMES)
+                    if len(body) < offset + balance_size:
+                        logger.error("trade transaction push parse error: truncated balance payload")
+                        return None
+                    vals = SeriesCodec.parse_at(body, TRADE_UPDATE_BALANCE_SCHEMA, offset)
+                    data["balance_info"] = dict(zip(TRADE_UPDATE_BALANCE_FIELD_NAMES, vals))
+                    offset += balance_size
+                    deals_result = _parse_optional_counted_segment(body, offset, DEAL_SCHEMA, DEAL_FIELD_NAMES, "deals")
+                    if deals_result is None:
+                        return None
+                    data["deals"], offset = deals_result
+                    positions_result = _parse_optional_counted_segment(
+                        body, offset, POSITION_SCHEMA, POSITION_FIELD_NAMES, "positions"
+                    )
+                    if positions_result is None:
+                        return None
+                    data["positions"], _ = positions_result
                 else:
                     offset = 4
                     txn_size = get_series_size(TRADE_TRANSACTION_SCHEMA)
@@ -353,43 +446,46 @@ class _PushHandlersMixin:
                     if len(body) >= offset + order_size:
                         order_vals = SeriesCodec.parse_at(body, ORDER_SCHEMA, offset)
                         data["order"] = dict(zip(ORDER_FIELD_NAMES, order_vals))
-                callback(data)
             except _PARSE_ERRORS as exc:
                 logger.error("trade transaction push parse error: %s", exc)
+                return None
+            return callback(data)
 
         self.transport.on(CMD_TRADE_UPDATE_PUSH, _handler)
         return _handler
 
-    def on_book_update(self, callback: Callable[[RecordList], None]) -> Callable:
+    def on_book_update(self, callback: Callable[[RecordList], Awaitable[None] | None]) -> Callable:
         """Register callback for order book / DOM push (cmd=23).
 
         Receives list of dicts, each with 'symbol_id', 'bids', 'asks'.
         bids/asks are lists of {'price': float, 'volume': int}.
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
-                callback(_parse_book_entries(result.body, self._symbols_by_id))
+                entries = _parse_book_entries(result.body, self._symbols_by_id)
             except _PARSE_ERRORS as exc:
                 logger.error("book update parse error: %s", exc)
+                return None
+            return callback(entries)
 
         self.transport.on(CMD_BOOK_PUSH, _handler)
         return _handler
 
     # ---- Typed push handler registration (Phase 16.1) ----
 
-    def on_tick_event(self, callback: Callable[[TickEvent], None]) -> Callable:
+    def on_tick_event(self, callback: Callable[[TickEvent], Awaitable[None] | None]) -> Callable:
         """Register a typed callback that receives :class:`TickEvent` objects.
 
         Unlike :meth:`on_tick` which passes a raw ``RecordList``, this
         handler converts each tick into a frozen :class:`TickEvent` dataclass.
         """
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
                 ticks = self._parse_ticks(result.body)
-                for tick in ticks:
-                    event = TickEvent(
+                events = [
+                    TickEvent(
                         symbol_id=int(tick.get("symbol_id", 0)),
                         symbol=str(tick.get("symbol", "")),
                         bid=float(tick.get("bid", 0.0)),
@@ -399,76 +495,74 @@ class _PushHandlersMixin:
                         timestamp=float(tick.get("tick_time_ms", 0) or tick.get("tick_time", 0)),
                         raw=tick,
                     )
-                    callback(event)
+                    for tick in ticks
+                ]
             except _PARSE_ERRORS as exc:
                 logger.error("typed tick event parse error: %s", exc)
+                return None
+            return _dispatch_event_list(callback, events)
 
         self.transport.on(CMD_TICK_PUSH, _handler)
         self._typed_tick_handlers.append(callback)
         return _handler
 
-    def on_book_event(self, callback: Callable[[BookEvent], None]) -> Callable:
+    def on_book_event(self, callback: Callable[[BookEvent], Awaitable[None] | None]) -> Callable:
         """Register a typed callback that receives :class:`BookEvent` objects."""
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
                 entries = _parse_book_entries(result.body, self._symbols_by_id)
-                for entry in entries:
-                    event = BookEvent(
+                events = [
+                    BookEvent(
                         symbol_id=int(entry.get("symbol_id", 0)),
                         symbol=str(entry.get("symbol", "")),
                         entries=entry.get("bids", []) + entry.get("asks", []),
                         raw=entry,
                     )
-                    callback(event)
+                    for entry in entries
+                ]
             except _PARSE_ERRORS as exc:
                 logger.error("typed book event parse error: %s", exc)
+                return None
+            return _dispatch_event_list(callback, events)
 
         self.transport.on(CMD_BOOK_PUSH, _handler)
         self._typed_book_handlers.append(callback)
         return _handler
 
-    def on_trade_result_event(self, callback: Callable[[TradeResultEvent], None]) -> Callable:
+    def on_trade_result_event(self, callback: Callable[[TradeResultEvent], Awaitable[None] | None]) -> Callable:
         """Register a typed callback that receives :class:`TradeResultEvent` objects."""
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
-                body = result.body
-                action_size = get_series_size(TRADE_RESULT_PUSH_SCHEMA)
-                resp_size = get_series_size(TRADE_RESULT_RESPONSE_SCHEMA)
-                data: dict[str, Any] = {}
-                if len(body) >= action_size:
-                    vals = SeriesCodec.parse(body, TRADE_RESULT_PUSH_SCHEMA)
-                    data.update(zip(TRADE_RESULT_PUSH_FIELD_NAMES, vals))
-                if len(body) >= action_size + resp_size:
-                    resp_vals = SeriesCodec.parse_at(body, TRADE_RESULT_RESPONSE_SCHEMA, action_size)
-                    data["result"] = dict(zip(TRADE_RESULT_RESPONSE_FIELD_NAMES, resp_vals))
+                data = _parse_trade_result_payload(result.body)
                 result_data = data.get("result", {})
                 event = TradeResultEvent(
-                    retcode=int(result_data.get("retcode", 0)),
-                    order=int(result_data.get("order", 0)),
+                    retcode=int(result_data.get("retcode", data.get("action_result_code", 0))),
+                    order=int(result_data.get("trade_order", result_data.get("order", data.get("trade_order", 0)))),
                     deal=int(result_data.get("deal", 0)),
                     volume=float(result_data.get("volume", 0)),
                     price=float(result_data.get("price", 0.0)),
                     comment=str(result_data.get("comment", "")),
                     raw=data,
                 )
-                callback(event)
             except _PARSE_ERRORS as exc:
                 logger.error("typed trade result event parse error: %s", exc)
+                return None
+            return callback(event)
 
         self.transport.on(CMD_TRADE_RESULT_PUSH, _handler)
         self._typed_trade_result_handlers.append(callback)
         return _handler
 
-    def on_account_event(self, callback: Callable[[AccountEvent], None]) -> Callable:
+    def on_account_event(self, callback: Callable[[AccountEvent], Awaitable[None] | None]) -> Callable:
         """Register a typed callback that receives :class:`AccountEvent` objects."""
 
-        def _handler(result: CommandResult) -> None:
+        def _handler(result: CommandResult) -> Awaitable[None] | None:
             try:
                 data = _parse_account_response(result.body)
                 if not data:
-                    return
+                    return None
                 event = AccountEvent(
                     balance=float(data.get("balance", 0.0)),
                     equity=float(data.get("equity", 0.0)),
@@ -476,9 +570,10 @@ class _PushHandlersMixin:
                     margin_free=float(data.get("margin_free", 0.0)),
                     raw=data,
                 )
-                callback(event)
             except _PARSE_ERRORS as exc:
                 logger.error("typed account event parse error: %s", exc)
+                return None
+            return callback(event)
 
         self.transport.on(CMD_ACCOUNT_UPDATE_PUSH, _handler)
         self._typed_account_handlers.append(callback)
@@ -496,7 +591,9 @@ class _PushHandlersMixin:
 
     def _cache_tick_push(self, result: CommandResult) -> None:
         try:
-            for tick in self._parse_ticks(result.body):
+            ticks = self._parse_ticks(result.body)
+            wire_presence = _extract_tick_wire_presence(result.body)
+            for idx, tick in enumerate(ticks):
                 symbol_id = int(tick["symbol_id"])
                 self._tick_cache_by_id[symbol_id] = tick
                 # Atomic deque creation via setdefault to avoid race conditions
@@ -504,7 +601,10 @@ class _PushHandlersMixin:
                     symbol_id,
                     deque(maxlen=self._tick_history_limit or None),
                 )
-                history.append(dict(tick))
+                entry = dict(tick)
+                if idx < len(wire_presence):
+                    entry["_has_quote"], entry["_has_trade"] = wire_presence[idx]
+                history.append(entry)
                 # Update LRU access order for eviction
                 if symbol_id in self._tick_history_access_order:
                     self._tick_history_access_order.remove(symbol_id)

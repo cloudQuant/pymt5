@@ -84,12 +84,16 @@ def truncate_ascii(value: str, limit: int) -> bytes:
 
     Args:
         value: Text to encode.
-        limit: Slice limit applied to the encoded bytes.
+        limit: Slice limit applied to the encoded bytes. Nonpositive values
+            return ``b""``.
 
     Returns:
-        The Latin-1 encoding sliced with ``[:limit]``.
+        The Latin-1 encoding sliced with ``[:limit]``, or ``b""`` when
+        ``limit <= 0``.
 
     """
+    if limit <= 0:
+        return b""
     return value.encode("latin1", errors="ignore")[:limit]
 
 
@@ -99,12 +103,15 @@ def pad_ascii(value: str, size: int) -> bytes:
     Args:
         value: Text to encode; unsupported Latin-1 characters are discarded.
         size: Field width in bytes. Longer encoded values are truncated.
+            Nonpositive values return ``b""``.
 
     Returns:
         Exactly ``size`` bytes for a nonnegative size, padded on the right with
         NUL bytes when necessary.
 
     """
+    if size <= 0:
+        return b""
     raw = truncate_ascii(value, size)
     return raw.ljust(size, b"\x00")
 
@@ -176,13 +183,15 @@ def pad_bytes(value: bytes, size: int) -> bytes:
 
     Args:
         value: Raw field contents.
-        size: Required field width in bytes.
+        size: Required field width in bytes. Nonpositive values return ``b""``.
 
     Returns:
         Exactly ``size`` bytes for a nonnegative size, using NUL bytes for
         right padding.
 
     """
+    if size <= 0:
+        return b""
     return value[:size].ljust(size, b"\x00")
 
 

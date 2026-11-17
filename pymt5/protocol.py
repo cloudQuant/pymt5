@@ -81,6 +81,9 @@ def _filetime_to_unix_ms(buffer: bytes) -> int:
     return filetime // FILETIME_TICKS_PER_MS - FILETIME_EPOCH_OFFSET_MS
 
 
+_SUPPORTED_OUTER_VERSIONS = frozenset({0, OUTER_PROTOCOL_VERSION})
+
+
 def pack_outer(body: bytes) -> bytes:
     """Prepend the standard eight-byte outer-protocol header to a body.
 
@@ -98,9 +101,6 @@ def pack_outer(body: bytes) -> bytes:
 def unpack_outer(frame: bytes) -> tuple[int, int, bytes]:
     """Validate and split a complete outer-protocol frame.
 
-    The version is returned but not checked against
-    ``OUTER_PROTOCOL_VERSION``.
-
     Args:
         frame: Complete frame, including its eight-byte header.
 
@@ -108,13 +108,16 @@ def unpack_outer(frame: bytes) -> tuple[int, int, bytes]:
         A tuple of ``(declared_body_length, protocol_version, body)``.
 
     Raises:
-        ProtocolError: If the header is incomplete or its declared body length
-            differs from the number of bytes after the header.
+        ProtocolError: If the header is incomplete, the protocol version is
+            unsupported, or its declared body length differs from the number of
+            bytes after the header.
 
     """
     if len(frame) < HEADER_BYTE_LENGTH:
         raise ProtocolError("frame too short")
     body_len, version = struct.unpack_from("<II", frame, 0)
+    if version not in _SUPPORTED_OUTER_VERSIONS:
+        raise ProtocolError(f"unsupported protocol version: {version}")
     body = frame[HEADER_BYTE_LENGTH:]
     if body_len != len(body):
         raise ProtocolError(f"frame length mismatch: header={body_len} actual={len(body)}")
@@ -179,18 +182,13 @@ def _field_value(field: Sequence[object] | Mapping[str, object]) -> Any:
 
 
 def _field_length(field: Sequence[object] | Mapping[str, object]) -> int | None:
-    if isinstance(field, Mapping):
-        value = field.get("propLength")
-        if value is None:
-            return None
-        if not isinstance(value, int):
-            raise ProtocolError("propLength must be an int")
-        return value
-    value = field[2] if len(field) > 2 else None
+    value = field.get("propLength") if isinstance(field, Mapping) else (field[2] if len(field) > 2 else None)
     if value is None:
         return None
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ProtocolError("propLength must be an int")
+    if value < 0:
+        raise ProtocolError(f"propLength must be non-negative, got {value}")
     return value
 
 
@@ -368,12 +366,14 @@ class SeriesCodec:
             Decoded values in schema order.
 
         Raises:
-            ProtocolError: If the buffer does not contain the complete record,
-                a required field length is missing, or a type or length tag is
-                invalid.
+            ProtocolError: If ``offset`` is out of range, the buffer does not
+                contain the complete record, a required field length is missing,
+                or a type or length tag is invalid.
             NotImplementedError: If a property type is unsupported.
 
         """
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or offset > len(buffer):
+            raise ProtocolError(f"invalid offset {offset!r} for buffer of length {len(buffer)}")
         required = get_series_size(schema)
         available = len(buffer) - offset
         if available < required:

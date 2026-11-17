@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
+
+from pymt5.exceptions import ValidationError
 
 
 class TokenBucketRateLimiter:
@@ -22,11 +25,19 @@ class TokenBucketRateLimiter:
         """Initialize a token bucket at full capacity.
 
         Args:
-            rate: Number of tokens replenished per second. Values less than or
-                equal to zero disable rate limiting.
+            rate: Number of tokens replenished per second. Zero disables
+                rate limiting.
             burst: Maximum number of accumulated tokens and initial bucket capacity.
 
+        Raises:
+            ValidationError: If ``rate`` is negative/non-finite or ``burst`` is
+                less than ``1``/non-finite.
+
         """
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate < 0:
+            raise ValidationError(f"rate must be a finite number >= 0, got {rate!r}")
+        if isinstance(burst, bool) or not isinstance(burst, (int, float)) or not math.isfinite(burst) or burst < 1:
+            raise ValidationError(f"burst must be a finite number >= 1, got {burst!r}")
         self.rate = rate
         self.burst = burst
         self._tokens = float(burst)

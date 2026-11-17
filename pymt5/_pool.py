@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pymt5._logging import get_logger
@@ -18,7 +18,7 @@ class PoolAccount:
 
     server: str
     login: int
-    password: str
+    password: str = field(repr=False)
     label: str = ""  # optional human-readable label
 
 
@@ -83,8 +83,15 @@ class MT5ConnectionPool:
             login_list = ", ".join(str(login) for login in sorted(duplicates))
             raise ValueError(f"Duplicate login key(s) configured for pool accounts: {login_list}")
 
-        tasks = [self._connect_one(acct) for acct in self._accounts]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        connect_tasks = [asyncio.create_task(self._connect_one(acct)) for acct in self._accounts]
+        try:
+            results = await asyncio.gather(*connect_tasks, return_exceptions=True)
+        except BaseException:
+            for task in connect_tasks:
+                task.cancel()
+            await asyncio.gather(*connect_tasks, return_exceptions=True)
+            await self.close_all()
+            raise
         for acct, result in zip(self._accounts, results):
             if isinstance(result, Exception):
                 label = acct.label or str(acct.login)
@@ -139,18 +146,31 @@ class MT5ConnectionPool:
         """Return all active client connections."""
         return list(self._clients.values())
 
+    def _account_label(self, login: int) -> str:
+        for acct in self._accounts:
+            if acct.login == login and acct.label:
+                return f"{acct.label} (login={login})"
+        return str(login)
+
+    def _log_broadcast_failures(self, operation: str, logins: list[int], results: list[Any]) -> None:
+        for login, result in zip(logins, results):
+            if isinstance(result, Exception):
+                logger.warning("pool: %s failed for account %s: %s", operation, self._account_label(login), result)
+
     async def broadcast_subscribe_ticks(self, symbol_ids: list[int]) -> None:
         """Subscribe to ticks on all connected clients concurrently."""
-        tasks = []
-        for client in self._clients.values():
-            tasks.append(client.subscribe_ticks(symbol_ids))
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if not self._clients:
+            return
+        logins = list(self._clients.keys())
+        tasks = [self._clients[login].subscribe_ticks(symbol_ids) for login in logins]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        self._log_broadcast_failures("subscribe_ticks", logins, results)
 
     async def broadcast_load_symbols(self) -> None:
         """Load symbols on all connected clients concurrently."""
-        tasks = []
-        for client in self._clients.values():
-            tasks.append(client.load_symbols())
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if not self._clients:
+            return
+        logins = list(self._clients.keys())
+        tasks = [self._clients[login].load_symbols() for login in logins]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        self._log_broadcast_failures("load_symbols", logins, results)

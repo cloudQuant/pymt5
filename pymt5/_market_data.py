@@ -96,6 +96,7 @@ class _MarketDataMixin(_CurrencyMixin):
     _subscribed_ids: list[int]
     _tick_subscription_lock: asyncio.Lock
     _subscribed_book_ids: list[int]
+    _book_subscription_lock: asyncio.Lock
     _symbol_cache_ttl: float
     _symbols_loaded_at: float
     _unknown_symbol_misses: dict[str, float]
@@ -120,8 +121,14 @@ class _MarketDataMixin(_CurrencyMixin):
         return time.monotonic() - loaded_at < ttl
 
     def invalidate_symbol_cache(self) -> None:
-        """Force the symbol cache to be reloaded on the next ``load_symbols()`` call."""
+        """Force basic, full, and negative symbol caches to be reloaded."""
         self._symbols_loaded_at = 0.0
+        full_symbols = getattr(self, "_full_symbols", None)
+        if full_symbols is not None:
+            full_symbols.clear()
+        full_symbol_times = getattr(self, "_full_symbols_loaded_at", None)
+        if full_symbol_times is not None:
+            full_symbol_times.clear()
         unknown_symbols = getattr(self, "_unknown_symbol_misses", None)
         if unknown_symbols is not None:
             unknown_symbols.clear()
@@ -235,7 +242,10 @@ class _MarketDataMixin(_CurrencyMixin):
                 raise ProtocolError(f"symbol list command {CMD_GET_SYMBOLS_GZIP} failed: code={result.code}")
             if result.body and len(result.body) > 4:
                 compressed = bytes(result.body[4:])
-                raw = await asyncio.to_thread(zlib.decompress, compressed)
+                try:
+                    raw = await asyncio.to_thread(zlib.decompress, compressed)
+                except zlib.error as exc:
+                    raise ProtocolError("failed to decompress symbol list") from exc
                 return _parse_counted_records(raw, SYMBOL_BASIC_SCHEMA, SYMBOL_BASIC_FIELD_NAMES)
             return []
         result = await self.transport.send_command(CMD_GET_SYMBOLS)
@@ -379,6 +389,8 @@ class _MarketDataMixin(_CurrencyMixin):
         Returns list of group name strings.
         """
         result = await self.transport.send_command(CMD_GET_SYMBOL_GROUPS)
+        if result.code != 0:
+            raise ProtocolError(f"symbol groups command {CMD_GET_SYMBOL_GROUPS} failed: code={result.code}")
         if not result.body or len(result.body) < 4:
             return []
         count = struct.unpack_from("<I", result.body, 0)[0]
@@ -409,6 +421,8 @@ class _MarketDataMixin(_CurrencyMixin):
         else:
             payload = b""
         result = await self.transport.send_command(CMD_GET_SPREADS, payload)
+        if result.code != 0:
+            raise ProtocolError(f"spreads command {CMD_GET_SPREADS} failed: code={result.code}")
         return _parse_counted_records(result.body, SPREAD_SCHEMA, SPREAD_FIELD_NAMES)
 
     async def subscribe_ticks(self, symbol_ids: list[int]) -> None:
@@ -469,22 +483,32 @@ class _MarketDataMixin(_CurrencyMixin):
         await self.subscribe_ticks(ids)
         return ids
 
+    def _get_book_subscription_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_book_subscription_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._book_subscription_lock = lock
+        return lock
+
     async def subscribe_book(self, symbol_ids: list[int]) -> None:
         """Subscribe to order book / depth-of-market for given symbols (cmd=22).
 
         After subscribing, the server pushes DOM updates via cmd=23.
         Register a handler with on_book_update() to receive them.
         """
-        existing = set(self._subscribed_book_ids)
-        merged = sorted(existing | set(symbol_ids))
-        payload = struct.pack(f"<{len(merged) + 1}I", len(merged), *merged)
-        await self.transport.send_command(CMD_SUBSCRIBE_BOOK, payload)
-        self._subscribed_book_ids = merged
-        logger.info(
-            "subscribed to order book for %d symbols (added %d new)",
-            len(merged),
-            len(set(symbol_ids) - existing),
-        )
+        async with self._get_book_subscription_lock():
+            existing = set(self._subscribed_book_ids)
+            merged = sorted(existing | set(symbol_ids))
+            payload = struct.pack(f"<{len(merged) + 1}I", len(merged), *merged)
+            result = await self.transport.send_command(CMD_SUBSCRIBE_BOOK, payload)
+            if result.code != 0:
+                raise ProtocolError(f"subscribe_book failed with code={result.code}")
+            self._subscribed_book_ids = merged
+            logger.info(
+                "subscribed to order book for %d symbols (added %d new)",
+                len(merged),
+                len(set(symbol_ids) - existing),
+            )
 
     async def subscribe_book_by_name(self, symbol_names: list[str]) -> list[int]:
         """Subscribe to order book by symbol names (requires load_symbols first).
@@ -507,19 +531,22 @@ class _MarketDataMixin(_CurrencyMixin):
 
     async def unsubscribe_book(self, symbol_ids: list[int]) -> None:
         """Remove specific symbol IDs from the current order-book subscription set."""
-        existing = set(self._subscribed_book_ids)
-        remaining = sorted(existing - set(symbol_ids))
-        if remaining:
-            payload = struct.pack(f"<{len(remaining) + 1}I", len(remaining), *remaining)
-        else:
-            payload = struct.pack("<I", 0)
-        await self.transport.send_command(CMD_SUBSCRIBE_BOOK, payload)
-        removed = existing - set(remaining)
-        self._subscribed_book_ids = remaining
-        for symbol_id in removed:
-            entry = self._book_cache_by_id.pop(symbol_id, None)
-            if entry and entry.get("symbol"):
-                self._book_cache_by_name.pop(entry["symbol"], None)
+        async with self._get_book_subscription_lock():
+            existing = set(self._subscribed_book_ids)
+            remaining = sorted(existing - set(symbol_ids))
+            if remaining:
+                payload = struct.pack(f"<{len(remaining) + 1}I", len(remaining), *remaining)
+            else:
+                payload = struct.pack("<I", 0)
+            result = await self.transport.send_command(CMD_SUBSCRIBE_BOOK, payload)
+            if result.code != 0:
+                raise ProtocolError(f"unsubscribe_book failed with code={result.code}")
+            removed = existing - set(remaining)
+            self._subscribed_book_ids = remaining
+            for symbol_id in removed:
+                entry = self._book_cache_by_id.pop(symbol_id, None)
+                if entry and entry.get("symbol"):
+                    self._book_cache_by_name.pop(entry["symbol"], None)
 
     async def subscribe_ticks_managed(self, symbol_ids: list[int]) -> SubscriptionHandle:
         """Subscribe to tick updates and return a managed handle.

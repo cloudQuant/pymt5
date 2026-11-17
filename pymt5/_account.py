@@ -36,6 +36,7 @@ from pymt5.constants import (
     PROP_U32,
     PROP_U64,
 )
+from pymt5.exceptions import ProtocolError, PyMT5Error
 from pymt5.protocol import SeriesCodec
 from pymt5.schemas import (
     CORPORATE_LINK_FIELD_NAMES,
@@ -156,7 +157,7 @@ class _AccountMixin:
                 build,
                 OBSERVED_WEBTERMINAL_BUILD_RELEASE_DATES.get(build, ""),
             )
-        except (KeyError, ValueError, TypeError, struct.error) as exc:
+        except (KeyError, ValueError, TypeError, struct.error, PyMT5Error, OSError) as exc:
             return self._fail_last_error(-99, f"version() failed: {exc}")
 
     async def get_account_summary(self) -> AccountInfo:
@@ -186,7 +187,7 @@ class _AccountMixin:
                     positions_count=len(positions),
                     orders_count=len(orders),
                 )
-        except (KeyError, ValueError, TypeError, struct.error, RuntimeError) as exc:
+        except (KeyError, ValueError, TypeError, struct.error, RuntimeError, PyMT5Error, OSError) as exc:
             logger.debug("get_account failed, falling back to positions: %s", exc)
         floating_profit = sum(p.get("profit", 0.0) for p in positions)
         floating_commission = sum(p.get("commission", 0.0) for p in positions)
@@ -219,6 +220,10 @@ class _AccountMixin:
             ]
         )
         result = await self.transport.send_command(CMD_CHANGE_PASSWORD, payload)
+        if result.code != 0:
+            raise ProtocolError(f"change_password failed with code={result.code}")
+        if len(result.body) < 4:
+            raise ProtocolError(f"change_password response too short: {len(result.body)} bytes")
         return int.from_bytes(result.body[:4], "little", signed=True)
 
     async def trader_params(self) -> tuple[str, str]:
@@ -271,6 +276,8 @@ class _AccountMixin:
             await self.init_session(cid=client_id)
         payload = self._build_opening_base_payload(request)
         result = await self.transport.send_command(CMD_OPEN_DEMO, payload)
+        if result.code != 0:
+            raise ProtocolError(f"open_demo_account failed with code={result.code}")
         return _parse_open_account_result(result.body)
 
     async def open_real_account(
@@ -286,6 +293,8 @@ class _AccountMixin:
             await self.init_session(cid=client_id)
         payload = self._build_real_account_payload(request)
         result = await self.transport.send_command(CMD_OPEN_REAL, payload)
+        if result.code != 0:
+            raise ProtocolError(f"open_real_account failed with code={result.code}")
         return _parse_open_account_result(result.body)
 
     async def verify_code(self, code: str) -> CommandResult:
@@ -327,6 +336,10 @@ class _AccountMixin:
             cid=client_id,
         )
         result = await self.transport.send_command(CMD_VERIFY_CODE, payload)
+        if result.code != 0:
+            raise ProtocolError(f"request_opening_verification failed with code={result.code}")
+        if len(result.body) < 2:
+            raise ProtocolError(f"request_opening_verification response too short: {len(result.body)} bytes")
         return _parse_verification_status(result.body)
 
     async def submit_opening_verification(
@@ -342,6 +355,10 @@ class _AccountMixin:
             await self.init_session(cid=client_id)
         payload = self._build_opening_base_payload(request)
         result = await self.transport.send_command(CMD_SEND_VERIFY_CODES, payload)
+        if result.code != 0:
+            raise ProtocolError(f"submit_opening_verification failed with code={result.code}")
+        if len(result.body) < 2:
+            raise ProtocolError(f"submit_opening_verification response too short: {len(result.body)} bytes")
         return _parse_verification_status(result.body)
 
     async def enable_otp(
@@ -381,7 +398,9 @@ class _AccountMixin:
             otp=otp,
             cid=cid,
         )
-        await self.transport.send_command(CMD_OTP_SETUP, payload)
+        result = await self.transport.send_command(CMD_OTP_SETUP, payload)
+        if result.code != 0:
+            raise ProtocolError(f"disable_otp failed with code={result.code}")
         return True
 
     async def send_notification(self, message: str) -> CommandResult:
@@ -499,7 +518,13 @@ class _AccountMixin:
     @staticmethod
     def _split_password_blob(password: str) -> tuple[str, bytes | None]:
         if password and len(password) == 320:
-            return "", bytes.fromhex(password)
+            try:
+                blob = bytes.fromhex(password)
+            except ValueError:
+                blob = b""
+            else:
+                if len(blob) == 160:
+                    return "", blob
         return (password or "")[:32], None
 
     @staticmethod
