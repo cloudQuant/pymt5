@@ -910,6 +910,36 @@ def test_analyze_docstrings_select_recommended_file_prefers_non_test_most_issues
     assert Path(selected_test["filepath"]).name == "test_two.py"
 
 
+def test_analyze_docstrings_import_on_win32_does_not_replace_stdio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Importing analyze_docstrings.py on Windows must not wrap or close sys.stdout/stderr."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    mod = _load_module("scripts/analyze_docstrings.py", monkeypatch, "test_mod_analyze_docstrings_win32")
+    assert sys.stdout is original_stdout
+    assert sys.stderr is original_stderr
+
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class DummyStream:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def reconfigure(self, **kwargs: str) -> None:
+            calls.append((self.label, kwargs))
+
+    monkeypatch.setattr(sys, "stdout", DummyStream("stdout"))
+    monkeypatch.setattr(sys, "stderr", DummyStream("stderr"))
+    mod._configure_windows_stdio()
+    assert calls == [
+        ("stdout", {"encoding": "utf-8", "errors": "replace"}),
+        ("stderr", {"encoding": "utf-8", "errors": "replace"}),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 30.5 (S6-10, S6-14): bootstrap validation without assert & ws cleanup
 # ---------------------------------------------------------------------------
