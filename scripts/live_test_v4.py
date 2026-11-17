@@ -2,6 +2,7 @@
 Live test v4: Use high-level MT5WebClient for end-to-end verification.
 Also dumps raw rates bytes for format analysis.
 """
+
 import asyncio
 import logging
 import os
@@ -39,7 +40,7 @@ async def main():
         password=PASSWORD,
         url="web.metatrader.app",
     )
-    log.info(f"Login OK: session={session_id}, token={token_hex[:16]}...")
+    log.info("Login OK: session=%s, has_token=%s, token_len=%d", session_id, bool(token_hex), len(token_hex))
 
     # No sleep needed - transport recv_loop auto-discards unsolicited pushes (cmd=15)
 
@@ -49,7 +50,9 @@ async def main():
         symbols = await client.get_symbols()
         log.info(f"Got {len(symbols)} symbols")
         for s in symbols[:5]:
-            log.info(f"  {s['trade_symbol']:20s} id={s['symbol_id']:>6} digits={s['digits']} path={s.get('symbol_path','')[:40]}")
+            log.info(
+                f"  {s['trade_symbol']:20s} id={s['symbol_id']:>6} digits={s['digits']} path={s.get('symbol_path', '')[:40]}"
+            )
     except Exception as e:
         log.error(f"get_symbols failed: {e}", exc_info=True)
         symbols = []
@@ -59,9 +62,9 @@ async def main():
     try:
         data = await client.get_positions_and_orders()
         log.info(f"Positions: {len(data['positions'])}, Orders: {len(data['orders'])}")
-        for p in data['positions'][:5]:
+        for p in data["positions"][:5]:
             log.info(f"  POS: {p['trade_symbol']} vol={p['trade_volume']} profit={p['profit']}")
-        for o in data['orders'][:5]:
+        for o in data["orders"][:5]:
             log.info(f"  ORD: {o['trade_symbol']} type={o['order_type']} vol={o['volume_initial']}")
     except Exception as e:
         log.error(f"get_positions_and_orders failed: {e}", exc_info=True)
@@ -73,8 +76,10 @@ async def main():
         bars = await client.get_rates("EURUSD", 1, now - 3600, now)
         log.info(f"Got {len(bars)} bars")
         for b in bars[:5]:
-            t = time.strftime('%Y-%m-%d %H:%M', time.gmtime(b['time']))
-            log.info(f"  {t}  O={b['open']:.5f} H={b['high']:.5f} L={b['low']:.5f} C={b['close']:.5f} vol={b['tick_volume']}")
+            t = time.strftime("%Y-%m-%d %H:%M", time.gmtime(b["time"]))
+            log.info(
+                f"  {t}  O={b['open']:.5f} H={b['high']:.5f} L={b['low']:.5f} C={b['close']:.5f} vol={b['tick_volume']}"
+            )
         if bars:
             log.info(f"  ... last bar: {time.strftime('%Y-%m-%d %H:%M', time.gmtime(bars[-1]['time']))}")
     except Exception as e:
@@ -84,10 +89,12 @@ async def main():
     log.info("=== 6. Get Trade History ===")
     try:
         now = int(time.time())
-        history = await client.get_trade_history(from_ts=now - 86400*30, to_ts=now)
+        history = await client.get_trade_history(from_ts=now - 86400 * 30, to_ts=now)
         log.info(f"Deals: {len(history['deals'])}, Orders: {len(history['orders'])}")
-        for d in history['deals'][:3]:
-            log.info(f"  DEAL: {d.get('trade_symbol','')} action={d.get('trade_action','')} profit={d.get('profit','')}")
+        for d in history["deals"][:3]:
+            log.info(
+                f"  DEAL: {d.get('trade_symbol', '')} action={d.get('trade_action', '')} profit={d.get('profit', '')}"
+            )
     except Exception as e:
         log.error(f"get_trade_history failed: {e}", exc_info=True)
 

@@ -33,23 +33,23 @@ class TestValidateVolume:
         validate_volume(1e-10)
 
     def test_zero_raises(self) -> None:
-        with pytest.raises(ValidationError, match="volume must be > 0"):
+        with pytest.raises(ValidationError, match="volume must be a finite value > 0"):
             validate_volume(0)
 
     def test_zero_float_raises(self) -> None:
-        with pytest.raises(ValidationError, match="volume must be > 0"):
+        with pytest.raises(ValidationError, match="volume must be a finite value > 0"):
             validate_volume(0.0)
 
     def test_negative_raises(self) -> None:
-        with pytest.raises(ValidationError, match="volume must be > 0"):
+        with pytest.raises(ValidationError, match="volume must be a finite value > 0"):
             validate_volume(-1)
 
     def test_negative_float_raises(self) -> None:
-        with pytest.raises(ValidationError, match="volume must be > 0"):
+        with pytest.raises(ValidationError, match="volume must be a finite value > 0"):
             validate_volume(-0.5)
 
     def test_large_negative_raises(self) -> None:
-        with pytest.raises(ValidationError, match="volume must be > 0"):
+        with pytest.raises(ValidationError, match="volume must be a finite value > 0"):
             validate_volume(-100_000.0)
 
     def test_error_message_includes_value(self) -> None:
@@ -82,23 +82,23 @@ class TestValidatePrice:
         validate_price(99999.99)
 
     def test_zero_raises(self) -> None:
-        with pytest.raises(ValidationError, match="price must be > 0"):
+        with pytest.raises(ValidationError, match="price must be a finite value > 0"):
             validate_price(0.0)
 
     def test_negative_raises(self) -> None:
-        with pytest.raises(ValidationError, match="price must be > 0"):
+        with pytest.raises(ValidationError, match="price must be a finite value > 0"):
             validate_price(-1.5)
 
     def test_custom_name_in_error_message(self) -> None:
-        with pytest.raises(ValidationError, match="stop_loss must be > 0"):
+        with pytest.raises(ValidationError, match="stop_loss must be a finite value > 0"):
             validate_price(-1.0, name="stop_loss")
 
     def test_custom_name_take_profit(self) -> None:
-        with pytest.raises(ValidationError, match="take_profit must be > 0"):
+        with pytest.raises(ValidationError, match="take_profit must be a finite value > 0"):
             validate_price(0.0, name="take_profit")
 
     def test_default_name_is_price(self) -> None:
-        with pytest.raises(ValidationError, match="price must be > 0"):
+        with pytest.raises(ValidationError, match="price must be a finite value > 0"):
             validate_price(-5.0)
 
     def test_error_message_includes_value(self) -> None:

@@ -2,6 +2,7 @@
 Live verification script for pymt5 against MetaQuotes-Demo.
 Run: python scripts/live_test.py
 """
+
 import asyncio
 import logging
 import struct
@@ -36,10 +37,6 @@ LOGIN = int(os.environ["PYMT5_LOGIN"])
 PASSWORD = os.environ["PYMT5_PASSWORD"]
 
 
-def hex_dump(data: bytes, limit: int = 128) -> str:
-    return data[:limit].hex()
-
-
 async def step1_raw_ws_connect():
     """Step 1: Just open WebSocket, send bootstrap, see what comes back."""
     import websockets
@@ -68,17 +65,17 @@ async def step1_raw_ws_connect():
 
     cipher = initial_cipher()
     init_key = initial_key_bytes()
-    log.info(f"Initial AES key ({len(init_key)} bytes): {init_key.hex()}")
+    log.info("Initial AES key ready (has_key=%s, key_len=%d)", bool(init_key), len(init_key))
 
     token = bytes(64)
     inner = build_command(CMD_BOOTSTRAP, token)
-    log.info(f"Bootstrap inner ({len(inner)} bytes): {hex_dump(inner)}")
+    log.info("Bootstrap inner (%d bytes)", len(inner))
 
     encrypted = cipher.encrypt(inner)
-    log.info(f"Bootstrap encrypted ({len(encrypted)} bytes): {hex_dump(encrypted)}")
+    log.info("Bootstrap encrypted (%d bytes)", len(encrypted))
 
     outer = pack_outer(encrypted)
-    log.info(f"Bootstrap outer packet ({len(outer)} bytes): {hex_dump(outer)}")
+    log.info("Bootstrap outer packet (%d bytes)", len(outer))
 
     log.info("Sending bootstrap...")
     await ws.send(outer)
@@ -92,42 +89,42 @@ async def step1_raw_ws_connect():
         return None
 
     if isinstance(response, str):
-        log.error(f"Got text response (unexpected): {response[:200]}")
+        log.error("Got text response (unexpected, len=%d)", len(response))
         await ws.close()
         return None
 
     raw = bytes(response)
-    log.info(f"Got binary response ({len(raw)} bytes): {hex_dump(raw)}")
+    log.info("Got binary response (%d bytes)", len(raw))
 
     body_len, version, encrypted_body = unpack_outer(raw)
-    log.info(f"Outer: body_len={body_len}, version={version}, encrypted_body={len(encrypted_body)} bytes")
+    log.info("Outer: body_len=%d, version=%d, encrypted_body=%d bytes", body_len, version, len(encrypted_body))
 
     try:
         decrypted = cipher.decrypt(encrypted_body)
-        log.info(f"Decrypted ({len(decrypted)} bytes): {hex_dump(decrypted)}")
+        log.info("Decrypted bootstrap response (%d bytes)", len(decrypted))
     except Exception as e:
-        log.error(f"Decryption failed: {e}")
+        log.error("Decryption failed: %s", e)
         log.info("Trying without decryption (maybe plaintext?)...")
         decrypted = encrypted_body
-        log.info(f"Raw body ({len(decrypted)} bytes): {hex_dump(decrypted)}")
+        log.info("Raw body (%d bytes)", len(decrypted))
 
     frame = parse_response_frame(decrypted)
-    log.info(f"Response frame: command={frame.command}, code={frame.code}, body_len={len(frame.body)}")
+    log.info("Response frame: command=%d, code=%d, body_len=%d", frame.command, frame.code, len(frame.body))
 
     if frame.code != 0:
-        log.error(f"Bootstrap failed with code {frame.code}")
+        log.error("Bootstrap failed with code %d", frame.code)
         await ws.close()
         return None
 
     if len(frame.body) < 66:
-        log.error(f"Bootstrap response body too short: {len(frame.body)}")
+        log.error("Bootstrap response body too short: %d", len(frame.body))
         await ws.close()
         return None
 
     new_token = frame.body[2:66]
     new_key_material = frame.body[66:]
-    log.info(f"New token ({len(new_token)} bytes): {new_token.hex()}")
-    log.info(f"New key material ({len(new_key_material)} bytes): {hex_dump(new_key_material)}")
+    log.info("New token received (has_token=%s, token_len=%d)", bool(new_token), len(new_token))
+    log.info("New key material received (has_key=%s, key_len=%d)", bool(new_key_material), len(new_key_material))
 
     return ws, new_token, new_key_material, cipher
 
@@ -150,6 +147,7 @@ async def step2_login(ws, token, key_material, old_cipher):
     log.info(f"New cipher initialized with {len(key_material)}-byte key")
 
     from pymt5.client import MT5WebClient
+
     client = MT5WebClient()
     cid = build_client_id()
     payload = client._build_login_payload(
@@ -165,16 +163,16 @@ async def step2_login(ws, token, key_material, old_cipher):
         utm_campaign="",
         utm_source="",
     )
-    log.info(f"Login payload ({len(payload)} bytes): {hex_dump(payload, 64)}...")
+    log.info("Login payload built (%d bytes)", len(payload))
 
     inner = build_command(CMD_LOGIN, payload)
-    log.info(f"Login inner ({len(inner)} bytes)")
+    log.info("Login inner (%d bytes)", len(inner))
 
     encrypted = new_cipher.encrypt(inner)
-    log.info(f"Login encrypted ({len(encrypted)} bytes)")
+    log.info("Login encrypted (%d bytes)", len(encrypted))
 
     outer = pack_outer(encrypted)
-    log.info(f"Login outer packet ({len(outer)} bytes)")
+    log.info("Login outer packet (%d bytes)", len(outer))
 
     log.info("Sending login...")
     await ws.send(outer)
@@ -187,31 +185,31 @@ async def step2_login(ws, token, key_material, old_cipher):
         return False
 
     raw = bytes(response)
-    log.info(f"Got login response ({len(raw)} bytes): {hex_dump(raw)}")
+    log.info("Got login response (%d bytes)", len(raw))
 
     _, _, encrypted_body = unpack_outer(raw)
 
     try:
         decrypted = new_cipher.decrypt(encrypted_body)
-        log.info(f"Login decrypted ({len(decrypted)} bytes): {hex_dump(decrypted)}")
+        log.info("Login decrypted (%d bytes)", len(decrypted))
     except Exception as e:
-        log.error(f"Login decryption with new key failed: {e}")
+        log.error("Login decryption with new key failed: %s", e)
         try:
             decrypted = old_cipher.decrypt(encrypted_body)
-            log.info(f"Login decrypted with OLD key ({len(decrypted)} bytes): {hex_dump(decrypted)}")
+            log.info("Login decrypted with OLD key (%d bytes)", len(decrypted))
         except Exception as e2:
-            log.error(f"Login decryption with old key also failed: {e2}")
+            log.error("Login decryption with old key also failed: %s", e2)
             return False
 
     frame = parse_response_frame(decrypted)
-    log.info(f"Login response: command={frame.command}, code={frame.code}, body_len={len(frame.body)}")
+    log.info("Login response: command=%d, code=%d, body_len=%d", frame.command, frame.code, len(frame.body))
 
     if frame.code != 0:
-        log.error(f"Login failed with code {frame.code}")
+        log.error("Login failed with code %d", frame.code)
         return False
 
     log.info("LOGIN SUCCESS!")
-    log.info(f"Login response body: {hex_dump(frame.body, 200)}")
+    log.info("Login response summary: code=%d, body_len=%d", frame.code, len(frame.body))
     return True
 
 
@@ -229,18 +227,18 @@ async def step_ping(ws, key_material, old_cipher):
 
     # Build ping command (cmd=51, no payload)
     inner = build_command(CMD_PING)
-    log.info(f"Ping inner ({len(inner)} bytes): {hex_dump(inner)}")
+    log.info("Ping inner (%d bytes)", len(inner))
 
     encrypted = new_cipher.encrypt(inner)
     outer = pack_outer(encrypted)
-    log.info(f"Ping outer ({len(outer)} bytes): {hex_dump(outer)}")
+    log.info("Ping outer (%d bytes)", len(outer))
 
     await ws.send(outer)
 
     try:
         response = await asyncio.wait_for(ws.recv(), timeout=10)
         raw = bytes(response)
-        log.info(f"Ping response ({len(raw)} bytes): {hex_dump(raw)}")
+        log.info("Ping response (%d bytes)", len(raw))
 
         _, _, enc_body = unpack_outer(raw)
         decrypted = new_cipher.decrypt(enc_body)

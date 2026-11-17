@@ -691,12 +691,12 @@ class TestDispatchExtended:
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        t._pending[CMD_TICK_PUSH].append(future)
+        t._pending[CMD_GET_ACCOUNT].append(future)
 
         listener_received = []
-        t.on(CMD_TICK_PUSH, lambda r: listener_received.append(r))
+        t.on(CMD_GET_ACCOUNT, lambda r: listener_received.append(r))
 
-        frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"both")
+        frame = ResponseFrame(command=CMD_GET_ACCOUNT, code=0, body=b"both")
         await t._dispatch(frame)
 
         # Future should be resolved
@@ -743,6 +743,8 @@ class TestDispatchExtended:
 
         frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"async_push")
         await t._dispatch(frame)
+        if t._listener_task is not None:
+            await t._listener_task
 
         assert len(received) == 1
         assert received[0].body == b"async_push"
@@ -753,15 +755,15 @@ class TestDispatchExtended:
 
         loop = asyncio.get_running_loop()
         f1 = loop.create_future()
-        f1.set_result(CommandResult(command=CMD_TICK_PUSH, code=0, body=b"old"))
+        f1.set_result(CommandResult(command=CMD_GET_ACCOUNT, code=0, body=b"old"))
         f2 = loop.create_future()
         f3 = loop.create_future()
 
-        t._pending[CMD_TICK_PUSH].append(f1)
-        t._pending[CMD_TICK_PUSH].append(f2)
-        t._pending[CMD_TICK_PUSH].append(f3)
+        t._pending[CMD_GET_ACCOUNT].append(f1)
+        t._pending[CMD_GET_ACCOUNT].append(f2)
+        t._pending[CMD_GET_ACCOUNT].append(f3)
 
-        frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"new")
+        frame = ResponseFrame(command=CMD_GET_ACCOUNT, code=0, body=b"new")
         await t._dispatch(frame)
 
         # f1 was already done so skipped; f2 should be resolved; f3 untouched

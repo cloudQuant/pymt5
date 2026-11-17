@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import math
+
 from pymt5.exceptions import SessionError, ValidationError
 
 
 def validate_volume(volume: float) -> None:
-    """Validate that volume is positive."""
-    if volume <= 0:
-        raise ValidationError(f"volume must be > 0, got {volume}")
+    """Validate that volume is finite and positive."""
+    if isinstance(volume, bool) or not math.isfinite(volume) or volume <= 0:
+        raise ValidationError(f"volume must be a finite value > 0, got {volume}")
 
 
 def validate_price(price: float, name: str = "price") -> None:
-    """Validate that a price value is positive."""
-    if price <= 0.0:
-        raise ValidationError(f"{name} must be > 0, got {price}")
+    """Validate that a price value is finite and positive."""
+    if isinstance(price, bool) or not math.isfinite(price) or price <= 0.0:
+        raise ValidationError(f"{name} must be a finite value > 0, got {price}")
 
 
 def validate_symbol_name(name: str) -> None:

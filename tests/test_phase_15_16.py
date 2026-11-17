@@ -19,6 +19,7 @@ import pytest
 from pymt5.constants import (
     CMD_ACCOUNT_UPDATE_PUSH,
     CMD_BOOK_PUSH,
+    CMD_GET_ACCOUNT,
     CMD_TICK_PUSH,
     CMD_TRADE_RESULT_PUSH,
     PROP_F64,
@@ -699,18 +700,18 @@ class TestCallbackErrorIsolation:
         def bad_callback(result):
             raise RuntimeError("broken")
 
-        t.on(CMD_TICK_PUSH, bad_callback)
+        t.on(CMD_GET_ACCOUNT, bad_callback)
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        t._pending[CMD_TICK_PUSH].append(future)
+        t._pending[CMD_GET_ACCOUNT].append(future)
 
-        frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"")
+        frame = ResponseFrame(command=CMD_GET_ACCOUNT, code=0, body=b"")
         await t._dispatch(frame)
 
         # The future should be resolved
         assert future.done()
-        assert future.result().command == CMD_TICK_PUSH
+        assert future.result().command == CMD_GET_ACCOUNT
 
     def test_on_callback_error_registration(self):
         """on_callback_error registers handler on both mixin and transport."""

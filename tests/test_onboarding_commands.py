@@ -74,6 +74,7 @@ def test_parse_open_account_result_helper():
 
 async def test_request_opening_verification_initializes_and_parses_status():
     client = MT5WebClient()
+    client.transport.is_ready = True
     client.transport.send_command = AsyncMock(
         side_effect=[
             CommandResult(command=CMD_INIT, code=0, body=b""),
@@ -140,6 +141,7 @@ async def test_submit_opening_verification_uses_base_payload():
 
 async def test_open_demo_account_uses_frontend_payload_and_parses_response():
     client = MT5WebClient()
+    client.transport.is_ready = True
     client.transport.send_command = AsyncMock(
         side_effect=[
             CommandResult(command=CMD_INIT, code=0, body=b""),
@@ -170,6 +172,7 @@ async def test_open_demo_account_uses_frontend_payload_and_parses_response():
 
 async def test_open_real_account_serializes_birth_date_and_documents():
     client = MT5WebClient()
+    client.transport.is_ready = True
     client.transport.send_command = AsyncMock(
         side_effect=[
             CommandResult(command=CMD_INIT, code=0, body=b""),

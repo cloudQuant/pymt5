@@ -127,7 +127,7 @@ jobs:
         with:
           name: pymt5-dist
           path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1 (v1.14.3)
         with:
           skip-existing: true
 
@@ -144,7 +144,7 @@ jobs:
         with:
           name: pymt5-dist
           path: dist
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2 (v2.6.2)
         with:
           generate_release_notes: true
           files: dist/*

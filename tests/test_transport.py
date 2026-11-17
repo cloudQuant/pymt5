@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from pymt5.constants import CMD_BOOTSTRAP, CMD_TICK_PUSH
+from pymt5.constants import CMD_BOOTSTRAP, CMD_GET_ACCOUNT, CMD_TICK_PUSH
 from pymt5.transport import CommandResult, MT5WebSocketTransport
 
 # ---- Init ----
@@ -78,16 +78,16 @@ async def test_dispatch_resolves_pending_future():
     t = MT5WebSocketTransport(uri="wss://x")
     loop = asyncio.get_running_loop()
     future = loop.create_future()
-    t._pending[CMD_TICK_PUSH].append(future)
+    t._pending[CMD_GET_ACCOUNT].append(future)
 
     from pymt5.protocol import ResponseFrame
 
-    frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"test")
+    frame = ResponseFrame(command=CMD_GET_ACCOUNT, code=0, body=b"test")
     await t._dispatch(frame)
 
     assert future.done()
     result = future.result()
-    assert result.command == CMD_TICK_PUSH
+    assert result.command == CMD_GET_ACCOUNT
     assert result.body == b"test"
 
 
@@ -118,6 +118,8 @@ async def test_dispatch_calls_async_listener():
 
     frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"async")
     await t._dispatch(frame)
+    if t._listener_task is not None:
+        await t._listener_task
 
     assert len(received) == 1
     assert received[0].body == b"async"
@@ -129,12 +131,12 @@ async def test_dispatch_skips_done_futures():
     done_future = loop.create_future()
     done_future.set_result(None)
     pending_future = loop.create_future()
-    t._pending[CMD_TICK_PUSH].append(done_future)
-    t._pending[CMD_TICK_PUSH].append(pending_future)
+    t._pending[CMD_GET_ACCOUNT].append(done_future)
+    t._pending[CMD_GET_ACCOUNT].append(pending_future)
 
     from pymt5.protocol import ResponseFrame
 
-    frame = ResponseFrame(command=CMD_TICK_PUSH, code=0, body=b"x")
+    frame = ResponseFrame(command=CMD_GET_ACCOUNT, code=0, body=b"x")
     await t._dispatch(frame)
 
     assert pending_future.done()

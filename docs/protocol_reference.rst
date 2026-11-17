@@ -38,7 +38,9 @@ body::
 
 - ``body_length`` is the number of bytes that follow the header (i.e.
   ``len(encrypted_body)``).
-- ``version`` is always ``1`` (``OUTER_PROTOCOL_VERSION``).
+- ``version`` is ``1`` (``OUTER_PROTOCOL_VERSION``) for outbound client
+  frames, while observed build 6320 server responses carry ``0``; ``unpack_outer``
+  accepts ``{0, 1}`` and rejects other versions with ``ProtocolError``.
 
 The outer frame is constructed by :func:`pymt5.protocol.pack_outer` and parsed
 by :func:`pymt5.protocol.unpack_outer`.
@@ -78,10 +80,13 @@ After decryption, the inner body has the following layout::
 Requests with the same command are serialized. If sending may have occurred and
 the result is uncertain because of a timeout, cancellation, or send failure, the
 connection is isolated and other in-flight requests fail; a later request cannot
-reuse that connection. This protects against the observed late-response sequence,
-but does not distinguish an unsolicited push or duplicate response sharing the
-command ID from a response. The server-side result of a timed-out or cancelled
-trade remains unknown and must be reconciled before any retry.
+reuse that connection. Pure unsolicited push commands never complete pending
+request futures, and shared commands can attach an optional
+``response_predicate`` for structural matching. These protections guard against
+the observed late-response sequence and obvious frame mismatches, but they do
+not distinguish every duplicate response or push sharing the command ID when it
+satisfies the structural check. The server-side result of a timed-out or
+cancelled trade remains unknown and must be reconciled before any retry.
 
 Key Exchange
 ------------
@@ -110,8 +115,10 @@ Bootstrap Flow (cmd=0)
        | 66     | 16/24  | AES session key (128 or 192bit) |
        +--------+--------+---------------------------------+
 
-4. Client replaces the initial cipher with a new ``AESCipher`` initialized from
-   the session key. All subsequent messages use this session key.
+4. Client validates that the extracted session key length is 16, 24, or 32
+   bytes (raising ``MT5ConnectionError`` otherwise) and replaces the initial
+   cipher with a new ``AESCipher`` initialized from the session key. All
+   subsequent messages use this session key.
 
 AES-CBC Encryption
 ~~~~~~~~~~~~~~~~~~

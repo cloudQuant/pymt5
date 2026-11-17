@@ -7,6 +7,7 @@ sizes within the 800-line guideline.
 
 from __future__ import annotations
 
+import re
 import struct
 from typing import TYPE_CHECKING, TypeVar
 
@@ -25,6 +26,20 @@ if TYPE_CHECKING:
     from pymt5.transport import MT5WebSocketTransport
 
 _T = TypeVar("_T")
+
+_SYMBOL_DELIMITER_RE = re.compile(r"[.\-_/#:]+")
+_KNOWN_BROKER_PREFIXES = ("FX", "MINI", "MICRO", "M")
+_KNOWN_BROKER_SUFFIXES = ("MICRO", "MINI", "STD", "PRO", "ECN", "RAW", "FX", "M", "C", "I", "S", "Z")
+
+
+def _matches_affixed_pair(token: str, pair: str) -> bool:
+    """Return whether *token* equals *pair* with optional known broker affixes."""
+    for prefix in ("", *_KNOWN_BROKER_PREFIXES):
+        for suffix in ("", *_KNOWN_BROKER_SUFFIXES):
+            if token == f"{prefix}{pair}{suffix}":
+                return True
+    return False
+
 
 logger = get_logger("pymt5.client")
 
@@ -151,12 +166,38 @@ class _CurrencyMixin:
             except (RuntimeError, struct.error, KeyError, ValueError) as exc:
                 logger.debug("load_symbols() failed in _find_conversion_symbol_name: %s", exc)
                 return None
+        base_u = base.upper()
+        quote_u = quote.upper()
+        pair = f"{base_u}{quote_u}"
         direct = f"{base}{quote}"
         if direct in self._symbols:
             return direct
-        matches = sorted(name for name in self._symbols if name.startswith(base) and name.endswith(quote))
-        if matches:
-            return matches[0]
+        exact_ci = sorted(name for name in self._symbols if name.upper() == pair)
+        if exact_ci:
+            return exact_ci[0]
+
+        delimited_matches: list[str] = []
+        affix_matches: list[str] = []
+        for name in self._symbols:
+            upper_name = name.upper()
+            tokens = [tok for tok in _SYMBOL_DELIMITER_RE.split(upper_name) if tok]
+            if not tokens:
+                continue
+            if (
+                tokens[0] == pair
+                or tokens[-1] == pair
+                or (len(tokens) >= 2 and (tokens[:2] == [base_u, quote_u] or tokens[-2:] == [base_u, quote_u]))
+            ):
+                delimited_matches.append(name)
+            elif _matches_affixed_pair(upper_name, pair) or (
+                len(tokens) > 1 and (_matches_affixed_pair(tokens[0], pair) or _matches_affixed_pair(tokens[-1], pair))
+            ):
+                affix_matches.append(name)
+
+        if delimited_matches:
+            return min(delimited_matches, key=lambda name: (len(name) - len(pair), name))
+        if affix_matches:
+            return min(affix_matches, key=lambda name: (len(name) - len(pair), name))
         return None
 
     def _get_conversion_prices(

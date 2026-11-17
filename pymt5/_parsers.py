@@ -202,11 +202,35 @@ def _normalize_full_symbol_record(record: Record) -> Record:
 def _tick_matches_copy_flags(tick: Record, flags: int) -> bool:
     if flags == COPY_TICKS_ALL:
         return True
-    has_quote = bool(float(tick.get("bid", 0.0) or 0.0) or float(tick.get("ask", 0.0) or 0.0))
-    has_trade = bool(float(tick.get("last", 0.0) or 0.0) or int(tick.get("tick_volume", 0) or 0))
+    has_quote = (
+        bool(tick["_has_quote"])
+        if "_has_quote" in tick
+        else bool(float(tick.get("bid", 0.0) or 0.0) or float(tick.get("ask", 0.0) or 0.0))
+    )
+    has_trade = (
+        bool(tick["_has_trade"])
+        if "_has_trade" in tick
+        else bool(float(tick.get("last", 0.0) or 0.0) or int(tick.get("tick_volume", 0) or 0))
+    )
     if flags & COPY_TICKS_INFO and has_quote:
         return True
     return bool(flags & COPY_TICKS_TRADE and has_trade)
+
+
+def _extract_tick_wire_presence(body: bytes | None) -> list[tuple[bool, bool]]:
+    """Return ``(has_quote, has_trade)`` flags from raw wire tick fields before cache merging."""
+    if not body:
+        return []
+    tick_size = get_series_size(TICK_SCHEMA)
+    count = len(body) // tick_size
+    presence: list[tuple[bool, bool]] = []
+    for idx in range(count):
+        vals = SeriesCodec.parse_at(body, TICK_SCHEMA, idx * tick_size)
+        raw = dict(zip(TICK_FIELD_NAMES, vals))
+        has_quote = bool(float(raw.get("bid", 0.0) or 0.0) or float(raw.get("ask", 0.0) or 0.0))
+        has_trade = bool(float(raw.get("last", 0.0) or 0.0) or int(raw.get("tick_volume", 0) or 0))
+        presence.append((has_quote, has_trade))
+    return presence
 
 
 def _to_copy_tick_record(tick: Record) -> Record:
@@ -329,11 +353,13 @@ def _parse_tick_batch(
     tick_size = get_series_size(TICK_SCHEMA)
     count = len(body) // tick_size
     ticks: RecordList = []
+    batch_latest: dict[int, Record] = {}
     for idx in range(count):
         vals = SeriesCodec.parse_at(body, TICK_SCHEMA, idx * tick_size)
         tick = dict(zip(TICK_FIELD_NAMES, vals))
         tick["tick_time_ms"] = tick["tick_time"] * 1000 + tick["time_ms_delta"]
-        sym_info = symbols_by_id.get(int(tick["symbol_id"]))
+        symbol_id = int(tick["symbol_id"])
+        sym_info = symbols_by_id.get(symbol_id)
         if sym_info:
             tick["symbol"] = sym_info.name
             digits = int(getattr(sym_info, "digits", 0) or 0)
@@ -350,18 +376,19 @@ def _parse_tick_batch(
                     on_auto_decision if selected_mode == "auto" else None,
                 )
 
-        # Merge with cached tick: carry forward non-zero prices for fields
-        # that the server sent as 0.0 (meaning "unchanged").
-        if tick_cache_by_id is not None:
-            symbol_id = int(tick["symbol_id"])
+        # Merge with the latest tick in this batch first, then fall back to cache
+        # for fields the server sent as 0.0 (meaning "unchanged").
+        cached = batch_latest.get(symbol_id)
+        if cached is None and tick_cache_by_id is not None:
             cached = tick_cache_by_id.get(symbol_id)
-            if cached:
-                for key in ("bid", "ask", "last"):
-                    if float(tick.get(key, 0.0) or 0.0) == 0.0:
-                        prev = float(cached.get(key, 0.0) or 0.0)
-                        if prev != 0.0:
-                            tick[key] = prev
+        if cached:
+            for key in ("bid", "ask", "last"):
+                if float(tick.get(key, 0.0) or 0.0) == 0.0:
+                    prev = float(cached.get(key, 0.0) or 0.0)
+                    if prev != 0.0:
+                        tick[key] = prev
 
+        batch_latest[symbol_id] = tick
         ticks.append(tick)
     return ticks
 
@@ -415,12 +442,12 @@ def _parse_account_trade_settings(body: bytes, offset: int) -> tuple[RecordList,
     if len(body) < offset + 4:
         return items, offset
     count = struct.unpack_from("<I", body, offset)[0]
+    offset += 4
     if count <= 0:
         return items, offset
-    offset += 4
     for _ in range(count):
         if offset + record_size > len(body):
-            break
+            return items, len(body)
         items.append(_parse_account_trade_settings_record(body, offset))
         offset += record_size
     return items, offset
@@ -445,19 +472,25 @@ def _parse_account_leverage_rules(body: bytes, offset: int) -> tuple[RecordList,
     offset += 4
     for _ in range(max(count, 0)):
         if offset + rule_size > len(body):
+            offset = len(body)
             break
         values = SeriesCodec.parse_at(body, ACCOUNT_WEB_LEVERAGE_RULE_SCHEMA, offset)
         rule = dict(zip(ACCOUNT_WEB_LEVERAGE_RULE_FIELD_NAMES, values))
         offset += rule_size
         tiers: RecordList = []
+        truncated = False
         for _ in range(max(int(rule.get("tier_count", 0) or 0), 0)):
             if offset + tier_size > len(body):
+                truncated = True
                 break
             tier_values = SeriesCodec.parse_at(body, ACCOUNT_WEB_LEVERAGE_TIER_SCHEMA, offset)
             tiers.append(dict(zip(ACCOUNT_WEB_LEVERAGE_TIER_FIELD_NAMES, tier_values)))
             offset += tier_size
         rule["tiers"] = tiers
         rules.append(rule)
+        if truncated:
+            offset = len(body)
+            break
     return rules, offset
 
 

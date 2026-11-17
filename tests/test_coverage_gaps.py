@@ -465,10 +465,13 @@ class TestGetFullSymbolInfoCatchBlock:
         body = struct.pack("<I", 1) + bytes(get_series_size(FULL_SYMBOL_SCHEMA))
         mock_result = CommandResult(command=CMD_GET_FULL_SYMBOLS, code=0, body=body)
         mixin.transport.send_command = AsyncMock(return_value=mock_result)
-        with patch(
-            "pymt5._market_data.SeriesCodec.parse_at",
-            side_effect=ValueError("mocked parse error"),
-        ), pytest.raises(ProtocolError, match="invalid full symbol response record"):
+        with (
+            patch(
+                "pymt5._market_data.SeriesCodec.parse_at",
+                side_effect=ValueError("mocked parse error"),
+            ),
+            pytest.raises(ProtocolError, match="invalid full symbol response record"),
+        ):
             await mixin.get_full_symbol_info("EURUSD")
 
 
@@ -751,6 +754,7 @@ def _create_market_data_mixin():
     obj._subscribed_ids = []
     obj._tick_subscription_lock = asyncio.Lock()
     obj._subscribed_book_ids = []
+    obj._book_subscription_lock = asyncio.Lock()
     return obj
 
 

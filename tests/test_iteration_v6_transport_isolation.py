@@ -129,17 +129,13 @@ async def test_build_failure_does_not_disconnect():
     socket.close.assert_not_awaited()
 
 
-@pytest.mark.parametrize("failure", ["send", "metrics", "send_cancel"])
+@pytest.mark.parametrize("failure", ["send", "send_cancel"])
 async def test_send_or_metrics_failure_invalidates(failure):
     transport, socket = _transport()
     notifications = []
     transport._on_disconnect = lambda: notifications.append(True)
     if failure == "send":
         socket.send.side_effect = OSError("send failure")
-    elif failure == "metrics":
-        transport._metrics = AsyncMock()
-        transport._metrics.on_command_sent = lambda command: (_ for _ in ()).throw(ValueError("metrics"))
-        transport._metrics.on_disconnect = lambda message: None
     else:
         started = asyncio.Event()
 
@@ -152,12 +148,32 @@ async def test_send_or_metrics_failure_invalidates(failure):
     if failure == "send_cancel":
         await started.wait()
         task.cancel()
-    with pytest.raises({"send": OSError, "metrics": ValueError, "send_cancel": asyncio.CancelledError}[failure]):
+    with pytest.raises({"send": OSError, "send_cancel": asyncio.CancelledError}[failure]):
         await task
     assert transport.state is TransportState.ERROR
     assert transport.ws is None
     socket.close.assert_awaited_once()
     assert notifications == [True]
+
+
+async def test_metrics_failure_after_send_does_not_invalidate_connection():
+    transport, socket = _transport()
+    notifications = []
+    transport._on_disconnect = lambda: notifications.append(True)
+    transport._metrics = AsyncMock()
+    transport._metrics.on_command_sent = lambda command: (_ for _ in ()).throw(ValueError("metrics"))
+    transport._metrics.on_command_received = lambda command, code: None
+    transport._metrics.on_disconnect = lambda message: None
+
+    task = asyncio.create_task(transport.send_command(CMD_GET_ACCOUNT))
+    await _wait_for_pending(transport, CMD_GET_ACCOUNT)
+    await transport._dispatch(ResponseFrame(CMD_GET_ACCOUNT, 0, b"ok"))
+    result = await task
+    assert result.body == b"ok"
+    assert transport.state is TransportState.READY
+    assert transport.ws is socket
+    socket.close.assert_not_awaited()
+    assert notifications == []
 
 
 async def test_explicit_close_during_isolation_suppresses_disconnect_notification():

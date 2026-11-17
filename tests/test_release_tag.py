@@ -21,10 +21,12 @@ def write_release_metadata(root: Path) -> None:
 
 
 def run_guard(root: Path, ref: str) -> subprocess.CompletedProcess[str]:
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("COV_CORE_", "COVERAGE_"))}
+    env["GITHUB_REF"] = ref
     return subprocess.run(
         [sys.executable, str(SCRIPT)],
         cwd=root,
-        env={**os.environ, "GITHUB_REF": ref},
+        env=env,
         capture_output=True,
         text=True,
         check=False,

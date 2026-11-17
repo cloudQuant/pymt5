@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import enum
+import math
 import warnings
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from pymt5._logging import get_logger
@@ -16,7 +17,7 @@ from pymt5.constants import (
     TRADE_RETCODE_PLACED,
     TRADE_RETCODE_REJECT,
 )
-from pymt5.types import Record
+from pymt5.types import Record, TradeResult
 
 logger = get_logger("pymt5.order_manager")
 
@@ -30,6 +31,54 @@ class OrderState(enum.Enum):
     CANCELED = "canceled"
     REJECTED = "rejected"
     EXPIRED = "expired"
+
+
+_TERMINAL_STATES: frozenset[OrderState] = frozenset(
+    {
+        OrderState.FILLED,
+        OrderState.CANCELED,
+        OrderState.REJECTED,
+        OrderState.EXPIRED,
+    }
+)
+
+_PUSH_STATE_MAP: dict[int, OrderState] = {
+    0: OrderState.PENDING,  # ORDER_STATE_STARTED
+    1: OrderState.PENDING,  # ORDER_STATE_PLACED
+    2: OrderState.CANCELED,  # ORDER_STATE_CANCELED
+    3: OrderState.PARTIALLY_FILLED,  # ORDER_STATE_PARTIAL
+    4: OrderState.FILLED,  # ORDER_STATE_FILLED
+    5: OrderState.REJECTED,  # ORDER_STATE_REJECTED
+    6: OrderState.EXPIRED,  # ORDER_STATE_EXPIRED
+}
+
+
+def _coerce_finite_float(value: Any) -> float | None:
+    """Convert *value* to a finite float, returning ``None`` for invalid/non-finite inputs."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _resolve_push_volume(raw_current: Any, raw_initial: Any, order_volume: float) -> float | None:
+    """Parse and clamp remaining volume from a push record into ``[0.0, order_volume]``."""
+    current_vol = _coerce_finite_float(raw_current)
+    if current_vol is None:
+        return None
+    initial_vol = _coerce_finite_float(raw_initial)
+    if (
+        initial_vol is not None
+        and initial_vol > 0.0
+        and order_volume > 0.0
+        and isinstance(raw_initial, int)
+        and initial_vol / order_volume >= 1000.0
+    ):
+        current_vol *= order_volume / initial_vol
+    return min(max(current_vol, 0.0), max(order_volume, 0.0))
 
 
 @dataclass
@@ -105,23 +154,31 @@ class OrderManager:
         logger.debug("tracking order %d %s vol=%.4f price=%.5f", order_id, symbol, volume, price)
         return order
 
-    def update_from_trade_result(self, trade_result: Record) -> TrackedOrder | None:
-        """Update a tracked order from a trade result record.
+    def update_from_trade_result(self, trade_result: TradeResult | Mapping[str, Any]) -> TrackedOrder | None:
+        """Update a tracked order from a :class:`TradeResult` or mapping record.
 
-        Expected keys in *trade_result*: ``order``, ``retcode``, and
+        Expected fields: ``order`` (or ``trade_order``), ``retcode``, and
         optionally ``deal``, ``volume``, ``price``, ``comment``.
 
         Returns the updated :class:`TrackedOrder` or ``None`` if the
         order is not being tracked.
         """
-        order_id = trade_result.get("order", 0)
+        result_data: dict[str, Any] = (
+            asdict(trade_result) if isinstance(trade_result, TradeResult) else dict(trade_result)
+        )
+        raw_order_id = result_data.get("order")
+        if not raw_order_id:
+            raw_order_id = result_data.get("trade_order", 0)
+        order_id = int(raw_order_id or 0)
         if not order_id:
             return None
         order = self._orders.get(order_id)
         if order is None:
             return None
+        if order.state in _TERMINAL_STATES:
+            return order
 
-        retcode = trade_result.get("retcode", 0)
+        retcode = result_data.get("retcode", 0)
         old_state = order.state
 
         # Map retcode to state
@@ -130,9 +187,12 @@ class OrderManager:
             order.filled_volume = order.volume
         elif retcode == TRADE_RETCODE_DONE_PARTIAL:
             order.state = OrderState.PARTIALLY_FILLED
-            filled = trade_result.get("volume", 0)
-            if filled:
-                order.filled_volume = float(filled)
+            raw_volume = result_data.get("volume", 0)
+            filled = _coerce_finite_float(raw_volume)
+            if filled is not None and filled > 0.0:
+                if isinstance(raw_volume, int) and order.volume > 0.0 and filled > order.volume and filled >= 10_000.0:
+                    filled /= 10**8
+                order.filled_volume = max(order.filled_volume, min(filled, max(order.volume, 0.0)))
         elif retcode == TRADE_RETCODE_REJECT:
             order.state = OrderState.REJECTED
         elif retcode == TRADE_RETCODE_CANCEL:
@@ -140,51 +200,52 @@ class OrderManager:
         elif retcode == TRADE_RETCODE_PLACED:
             order.state = OrderState.PENDING
 
-        if "price" in trade_result and trade_result["price"]:
-            order.fill_price = float(trade_result["price"])
-        if "comment" in trade_result:
-            order.comment = str(trade_result["comment"])
+        fill_price = _coerce_finite_float(result_data.get("price"))
+        if fill_price is not None and fill_price > 0.0:
+            order.fill_price = fill_price
+        if "comment" in result_data:
+            order.comment = str(result_data["comment"])
 
-        order.raw.update(trade_result)
+        order.raw.update(result_data)
 
         if order.state != old_state:
             self._fire_state_change(order, old_state)
 
         return order
 
-    def update_from_push(self, push_data: Record) -> None:
+    def update_from_push(self, push_data: Mapping[str, Any]) -> None:
         """Update tracked orders from a push notification.
 
-        Handles order-state pushes that contain ``order``, ``state``,
-        and optionally ``volume_current``.
+        Handles order-state pushes that contain ``order`` or ``trade_order``,
+        ``state`` or ``order_state``, and optionally ``volume_current``.
         """
-        order_id = push_data.get("order", push_data.get("trade_order", 0))
+        raw_order_id = push_data.get("order")
+        if not raw_order_id:
+            raw_order_id = push_data.get("trade_order", 0)
+        order_id = int(raw_order_id or 0)
         if not order_id:
             return
         order = self._orders.get(order_id)
-        if order is None:
+        if order is None or order.state in _TERMINAL_STATES:
             return
 
         old_state = order.state
-        state_val = push_data.get("state")
+        state_val = push_data.get("state", push_data.get("order_state"))
 
         if state_val is not None:
-            state_map = {
-                0: OrderState.PENDING,  # ORDER_STATE_STARTED
-                1: OrderState.PENDING,  # ORDER_STATE_PLACED
-                2: OrderState.CANCELED,  # ORDER_STATE_CANCELED
-                3: OrderState.PARTIALLY_FILLED,  # ORDER_STATE_PARTIAL
-                4: OrderState.FILLED,  # ORDER_STATE_FILLED
-                5: OrderState.REJECTED,  # ORDER_STATE_REJECTED
-                6: OrderState.EXPIRED,  # ORDER_STATE_EXPIRED
-            }
-            new_state = state_map.get(state_val)
+            new_state = _PUSH_STATE_MAP.get(state_val)
             if new_state is not None:
                 order.state = new_state
 
-        if "volume_current" in push_data:
-            remaining = float(push_data["volume_current"])
-            order.filled_volume = order.volume - remaining
+        current_vol = (
+            _resolve_push_volume(push_data.get("volume_current"), push_data.get("volume_initial"), order.volume)
+            if "volume_current" in push_data
+            else None
+        )
+        if current_vol is not None:
+            order.filled_volume = max(order.filled_volume, order.volume - current_vol)
+        if order.state == OrderState.FILLED and current_vol is None:
+            order.filled_volume = order.volume
 
         order.raw.update(push_data)
 

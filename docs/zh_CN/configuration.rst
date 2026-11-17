@@ -22,7 +22,7 @@
        超时不等于服务器 ACK 或 NACK。
    * - ``heartbeat_interval``
      - ``30.0``
-     - 登录后心跳 ping 的间隔秒数。
+     - 登录后心跳 ping 的间隔秒数（必须为有限正数）。
    * - ``auto_reconnect``
      - ``False``
      - 意外断线后重新连接并登录。
@@ -34,7 +34,7 @@
      - 带抖动指数退避的基础值和上限。
    * - ``rate_limit`` / ``rate_burst``
      - ``0`` / ``20``
-     - 可选令牌桶命令限流；零表示不限流。
+     - 可选令牌桶命令限流（有限值 ``rate >= 0`` 且 ``burst >= 1``）；零表示不限流。
    * - ``metrics``
      - ``None``
      - 可选 ``MetricsCollector`` 实现。
@@ -91,7 +91,8 @@ market-deal 行为。客户端不会根据握手 build 号自动推断该配置�
    * - ``PYMT5_INTEGRATION=1``
      - 显式启用在线 integration 测试；离线门禁不设置它。
    * - ``PYMT5_LOG_LEVEL``
-     - 库日志阈值。采样报告中避免输出凭据/session 等敏感日志。
+     - 库日志阈值（默认为 ``WARNING``；未显式配置的 ``structlog`` 会桥接至标准库 ``logging``）。
+       采样报告中避免输出凭据/session 等敏感日志。
 
 核心客户端不会自动加载 ``.env``。请使用应用的密钥管理器或显式 dotenv
 加载器，并确保本地环境文件已被 Git 忽略。

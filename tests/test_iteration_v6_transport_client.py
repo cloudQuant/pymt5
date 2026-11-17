@@ -425,9 +425,14 @@ async def test_metrics_failure_after_send_removes_pending_future() -> None:
     transport.ws = _WebSocket()
     transport.is_ready = True
 
-    with pytest.raises(RuntimeError, match="metrics failed"):
-        await transport.send_command(CMD_GET_ACCOUNT)
+    task = asyncio.create_task(transport.send_command(CMD_GET_ACCOUNT))
+    while not transport._pending.get(CMD_GET_ACCOUNT):
+        await asyncio.sleep(0)
+    await transport._dispatch(ResponseFrame(CMD_GET_ACCOUNT, 0, b"ok"))
+    result = await task
 
+    assert result.body == b"ok"
+    assert transport.is_ready
     assert CMD_GET_ACCOUNT not in transport._pending
 
 

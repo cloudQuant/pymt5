@@ -6,9 +6,10 @@ retrieval, and order validation.
 
 from __future__ import annotations
 
+import math
 import struct
 from datetime import datetime
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pymt5._logging import get_logger
 from pymt5._parsers import (
@@ -20,6 +21,7 @@ from pymt5._parsers import (
     _validate_requested_stops,
     _validate_requested_volume,
 )
+from pymt5._validation import validate_price
 from pymt5.constants import (
     CMD_GET_POSITIONS_ORDERS,
     CMD_GET_TRADE_HISTORY,
@@ -45,6 +47,7 @@ from pymt5.constants import (
     TRADE_RETCODE_DESCRIPTIONS,
     TRADE_RETCODE_DONE,
     TRADE_RETCODE_DONE_PARTIAL,
+    TRADE_RETCODE_ERROR,
     TRADE_RETCODE_INVALID,
     TRADE_RETCODE_INVALID_EXPIRATION,
     TRADE_RETCODE_INVALID_FILL,
@@ -78,6 +81,8 @@ if TYPE_CHECKING:
     from pymt5.types import SymbolInfo
 
 _T = TypeVar("_T")
+_MAX_UINT64 = 0xFFFFFFFFFFFFFFFF
+_STOP_LIMIT_ORDER_TYPES = frozenset({ORDER_TYPE_BUY_STOP_LIMIT, ORDER_TYPE_SELL_STOP_LIMIT})
 
 logger = get_logger("pymt5.client")
 
@@ -136,10 +141,14 @@ class _TradingMixin:
         """
         result = await self.transport.send_command(CMD_GET_POSITIONS_ORDERS)
         body = result.body
+        if not body or len(body) < 4:
+            return {"positions": [], "orders": []}
+        pos_count = struct.unpack_from("<I", body, 0)[0]
         positions = _parse_counted_records(body, POSITION_SCHEMA, POSITION_FIELD_NAMES)
+        if len(positions) < pos_count:
+            return {"positions": positions, "orders": []}
         pos_size = get_series_size(POSITION_SCHEMA)
-        pos_count = struct.unpack_from("<I", body, 0)[0] if body else 0
-        order_offset = 4 + pos_count * pos_size
+        order_offset = 4 + len(positions) * pos_size
         orders = _parse_counted_records(body[order_offset:], ORDER_SCHEMA, ORDER_FIELD_NAMES)
         return {"positions": positions, "orders": orders}
 
@@ -160,18 +169,24 @@ class _TradingMixin:
         payload = struct.pack("<ii", from_ts, to_ts)
         result = await self.transport.send_command(CMD_GET_TRADE_HISTORY, payload)
         body = result.body
+        if not body or len(body) < 4:
+            return {"deals": [], "orders": []}
         deal_size = get_series_size(DEAL_SCHEMA)
-        deal_count = struct.unpack_from("<I", body, 0)[0] if body else 0
+        deal_count = struct.unpack_from("<I", body, 0)[0]
         deals = []
         offset = 4
         for _ in range(deal_count):
+            if offset + deal_size > len(body):
+                break
             vals = SeriesCodec.parse_at(body, DEAL_SCHEMA, offset)
             d = dict(zip(DEAL_FIELD_NAMES, vals))
             d["time_create"] = d["time_create"] * 1000 + d.get("time_create_ms", 0)
             d["time_update"] = d["time_update"] * 1000 + d.get("time_update_ms", 0)
             deals.append(d)
             offset += deal_size
-        orders = _parse_counted_records(body[offset:], ORDER_SCHEMA, ORDER_FIELD_NAMES)
+        orders = (
+            [] if len(deals) < deal_count else _parse_counted_records(body[offset:], ORDER_SCHEMA, ORDER_FIELD_NAMES)
+        )
         return {"deals": deals, "orders": orders}
 
     async def get_positions(self) -> RecordList:
@@ -274,7 +289,12 @@ class _TradingMixin:
         if group is not None:
             deals = [item for item in deals if _matches_group_mask(item.get("trade_symbol", ""), group)]
         if ticket is not None:
-            deals = [item for item in deals if int(item.get("trade_order", 0)) == int(ticket)]
+            target_ticket = int(ticket)
+            deals = [
+                item
+                for item in deals
+                if (deal_id := item.get("deal", item.get("ticket"))) is not None and int(deal_id) == target_ticket
+            ]
         if position is not None:
             deals = [item for item in deals if int(item.get("position_id", 0)) == int(position)]
         return deals
@@ -456,14 +476,28 @@ class _TradingMixin:
                 stop-loss or take-profit price is negative.
 
         """
+        if isinstance(volume, bool) or volume < 0 or volume > _MAX_UINT64:
+            raise ValidationError(f"volume must be within uint64 range [0, {_MAX_UINT64}], got {volume}")
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING) and volume <= 0:
             raise ValidationError(f"volume must be > 0 for trade_action={trade_action}, got {volume}")
+        for label, value in (
+            ("price_order", price_order),
+            ("price_trigger", price_trigger),
+            ("price_sl", price_sl),
+            ("price_tp", price_tp),
+        ):
+            if not math.isfinite(value):
+                raise ValidationError(f"{label} must be finite, got {value}")
+            if value < 0.0:
+                raise ValidationError(f"{label} must be >= 0, got {value}")
         if trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL) and price_order <= 0.0:
             logger.debug("market order with price_order=0; server will use current price")
         if trade_action == TRADE_ACTION_PENDING and price_order <= 0.0:
             raise ValidationError(f"price_order must be > 0 for pending orders, got {price_order}")
-        if trade_action == TRADE_ACTION_MODIFY and order <= 0:
-            raise ValidationError(f"order ticket must be > 0 for MODIFY action, got {order}")
+        if trade_action == TRADE_ACTION_MODIFY:
+            if order <= 0:
+                raise ValidationError(f"order ticket must be > 0 for MODIFY action, got {order}")
+            validate_price(price_order, "price_order")
         if trade_action == TRADE_ACTION_REMOVE and order <= 0:
             raise ValidationError(f"order ticket must be > 0 for REMOVE action, got {order}")
         if trade_action == TRADE_ACTION_SLTP and position_id <= 0:
@@ -473,10 +507,6 @@ class _TradingMixin:
                 f"position_id and position_by must be > 0 for CLOSE_BY, "
                 f"got position_id={position_id}, position_by={position_by}"
             )
-        if price_sl < 0.0:
-            raise ValidationError(f"price_sl must be >= 0, got {price_sl}")
-        if price_tp < 0.0:
-            raise ValidationError(f"price_tp must be >= 0, got {price_tp}")
         payload = SeriesCodec.serialize(
             [
                 (PROP_U32, action_id),
@@ -521,23 +551,31 @@ class _TradingMixin:
             ValidationError: If the translated request fails trade-field validation.
 
         """
+        trade_action = int(request.get("action", 0) or 0)
         symbol = str(request.get("symbol", "") or "")
         order_type = int(request.get("type", 0) or 0)
         price = float(request.get("price", 0.0) or 0.0)
         stoplimit = float(request.get("stoplimit", 0.0) or 0.0)
         price_order = price
         price_trigger = 0.0
-        if order_type in {ORDER_TYPE_BUY_STOP_LIMIT, ORDER_TYPE_SELL_STOP_LIMIT}:
+        if order_type in _STOP_LIMIT_ORDER_TYPES:
             price_order = stoplimit
             price_trigger = price
         raw_volume = float(request.get("volume", 0.0) or 0.0)
+        if not math.isfinite(raw_volume) or raw_volume < 0.0:
+            raise ValidationError(f"volume must be a finite non-negative value, got {raw_volume}")
+        requires_volume = trade_action in (TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING)
+        if requires_volume and raw_volume <= 0.0:
+            raise ValidationError(f"volume must be > 0 for trade_action={trade_action}, got {raw_volume}")
         volume = self._volume_to_lots(raw_volume)
-        if volume < 0:
+        if volume < 0 or volume > _MAX_UINT64:
             raise ValidationError(f"volume encoding overflow: {raw_volume} -> {volume}")
+        if requires_volume and volume <= 0:
+            raise ValidationError(f"volume must be > 0 after scaling, got {raw_volume}")
         digits = self._resolve_digits(symbol, None) if symbol else 0
         return await self.trade_request(
             action_id=int(request.get("action_id", request.get("request_id", 0)) or 0),
-            trade_action=int(request.get("action", 0) or 0),
+            trade_action=trade_action,
             symbol=symbol,
             volume=volume,
             digits=digits,
@@ -558,20 +596,32 @@ class _TradingMixin:
             time_expiration=_coerce_optional_timestamp(request.get("expiration")),
         )
 
+    @staticmethod
+    def _float_or_default(value: Any, default: float) -> float:
+        return default if value is None or value == "" else float(value)
+
     async def order_check(self, request: Record) -> Record:
         """Best-effort local pre-flight validation for an MT5 trade request."""
         try:
             normalized = self._normalize_order_request(request)
             retcode, comment = await self._validate_order_check_request(normalized)
             account = await self.get_account()
-            balance = float(account.get("balance", 0.0) or 0.0)
-            equity = float(account.get("equity", balance) or balance)
-            profit = float(account.get("profit", 0.0) or 0.0)
-            margin = float(account.get("margin", 0.0) or 0.0)
-            additional_margin = 0.0
+            balance = self._float_or_default(account.get("balance"), 0.0)
+            equity = self._float_or_default(account.get("equity"), balance)
+            profit = self._float_or_default(account.get("profit"), 0.0)
+            margin = self._float_or_default(account.get("margin"), 0.0)
+            additional_margin: float | None = 0.0
             if retcode in {0, TRADE_RETCODE_PLACED, TRADE_RETCODE_DONE, TRADE_RETCODE_DONE_PARTIAL}:
                 additional_margin = await self._estimate_order_margin(normalized)
-            margin_post = margin + additional_margin
+            if additional_margin is None:
+                retcode = TRADE_RETCODE_ERROR
+                err_code, err_msg = self._last_error
+                comment = err_msg or TRADE_RETCODE_DESCRIPTIONS.get(retcode, "Request processing error")
+                if err_code == 0:
+                    self._last_error = (int(retcode), comment)
+                margin_post = margin
+            else:
+                margin_post = margin + additional_margin
             margin_free = equity - margin_post
             margin_level = 0.0 if margin_post <= 0.0 else (equity / margin_post) * 100.0
             if (
@@ -582,7 +632,7 @@ class _TradingMixin:
                 comment = TRADE_RETCODE_DESCRIPTIONS.get(retcode, "Not enough money")
             if retcode == 0:
                 self._clear_last_error()
-            else:
+            elif additional_margin is not None:
                 self._last_error = (int(retcode), comment)
             return {
                 "retcode": int(retcode),
@@ -599,12 +649,12 @@ class _TradingMixin:
             message = f"order_check() failed: {exc}"
             self._last_error = (-99, message)
             account = await self.get_account()
-            balance = float(account.get("balance", 0.0) or 0.0)
-            equity = float(account.get("equity", balance) or balance)
-            profit = float(account.get("profit", 0.0) or 0.0)
-            margin = float(account.get("margin", 0.0) or 0.0)
-            margin_free = float(account.get("margin_free", equity - margin) or (equity - margin))
-            margin_level = float(account.get("margin_level", 0.0) or 0.0)
+            balance = self._float_or_default(account.get("balance"), 0.0)
+            equity = self._float_or_default(account.get("equity"), balance)
+            profit = self._float_or_default(account.get("profit"), 0.0)
+            margin = self._float_or_default(account.get("margin"), 0.0)
+            margin_free = self._float_or_default(account.get("margin_free"), equity - margin)
+            margin_level = self._float_or_default(account.get("margin_level"), 0.0)
             return {
                 "retcode": -99,
                 "balance": balance,
@@ -665,8 +715,16 @@ class _TradingMixin:
             return TRADE_RETCODE_INVALID, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID]
         if symbol_info is None:
             return TRADE_RETCODE_INVALID, f"symbol not found: {symbol}"
-        if volume <= 0.0:
+        if not math.isfinite(volume) or volume <= 0.0:
             return TRADE_RETCODE_INVALID_VOLUME, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_VOLUME]
+        for field in ("price_order", "price_trigger"):
+            val = float(request.get(field, 0.0) or 0.0)
+            if not math.isfinite(val) or val < 0.0:
+                return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
+        for field in ("sl", "tp"):
+            val = float(request.get(field, 0.0) or 0.0)
+            if not math.isfinite(val) or val < 0.0:
+                return TRADE_RETCODE_INVALID_STOPS, f"{field} must be finite and >= 0"
         if _order_side(order_type) is None:
             return TRADE_RETCODE_INVALID_ORDER, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_ORDER]
         trade_mode = int(symbol_info.get("trade_mode", 0) or 0)
@@ -694,13 +752,51 @@ class _TradingMixin:
         if fill_flags and type_filling not in {0, 1, 2}:
             return TRADE_RETCODE_INVALID_FILL, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_FILL]
         price_check = await self._resolve_order_check_price(request, symbol_info)
-        if price_check <= 0.0:
+        if not math.isfinite(price_check) or price_check <= 0.0:
             return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
-        if action == TRADE_ACTION_PENDING and float(request.get("price_order", 0.0) or 0.0) <= 0.0:
-            return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
-        stops_error = _validate_requested_stops(symbol_info, request, price_check)
+        if action == TRADE_ACTION_PENDING:
+            if float(request.get("price_order", 0.0) or 0.0) <= 0.0:
+                return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
+            if order_type in _STOP_LIMIT_ORDER_TYPES and float(request.get("price_trigger", 0.0) or 0.0) <= 0.0:
+                return TRADE_RETCODE_INVALID_PRICE, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID_PRICE]
+        stops_error = self._validate_order_stops(symbol_info, request, price_check)
         if stops_error is not None:
             return TRADE_RETCODE_INVALID_STOPS, stops_error
+        return None
+
+    def _validate_order_stops(self, symbol_info: Record, request: Record, reference_price: float) -> str | None:
+        order_type = int(request.get("type", 0) or 0)
+        if order_type not in _STOP_LIMIT_ORDER_TYPES:
+            return _validate_requested_stops(symbol_info, request, reference_price)
+
+        point = float(symbol_info.get("point", 0.0) or 0.0)
+        stops_level = float(symbol_info.get("trade_stops_level", 0.0) or 0.0)
+        min_distance = point * stops_level if point > 0.0 and stops_level > 0.0 else 0.0
+        is_buy = order_type == ORDER_TYPE_BUY_STOP_LIMIT
+
+        symbol = str(request.get("symbol", "") or "")
+        market_price = self._resolve_tick_reference_price(symbol, order_type)
+        trigger = float(request.get("price_trigger", 0.0) or 0.0)
+        if market_price > 0.0 and trigger > 0.0 and min_distance > 0.0:
+            trigger_gap = (trigger - market_price) if is_buy else (market_price - trigger)
+            if trigger_gap + 1e-12 < min_distance:
+                return "pending trigger is closer than symbol stop level"
+
+        exec_price = float(request.get("price_order", 0.0) or 0.0) or trigger
+        sl = float(request.get("sl", 0.0) or 0.0)
+        tp = float(request.get("tp", 0.0) or 0.0)
+        if sl > 0.0:
+            sl_gap = (exec_price - sl) if is_buy else (sl - exec_price)
+            if sl_gap <= 0.0:
+                return "sl is on the wrong side of execution price"
+            if min_distance > 0.0 and sl_gap + 1e-12 < min_distance:
+                return "sl is closer than symbol stop level"
+        if tp > 0.0:
+            tp_gap = (tp - exec_price) if is_buy else (exec_price - tp)
+            if tp_gap <= 0.0:
+                return "tp is on the wrong side of execution price"
+            if min_distance > 0.0 and tp_gap + 1e-12 < min_distance:
+                return "tp is closer than symbol stop level"
         return None
 
     async def _validate_order_check_request(self, request: Record) -> tuple[int, str]:
@@ -727,7 +823,7 @@ class _TradingMixin:
             return TRADE_RETCODE_INVALID, TRADE_RETCODE_DESCRIPTIONS[TRADE_RETCODE_INVALID]
         return 0, TRADE_RETCODE_DESCRIPTIONS[0]
 
-    async def _estimate_order_margin(self, request: Record) -> float:
+    async def _estimate_order_margin(self, request: Record) -> float | None:
         action = int(request.get("action", 0) or 0)
         if action not in {TRADE_ACTION_DEAL, TRADE_ACTION_MARKET_DEAL, TRADE_ACTION_PENDING}:
             return 0.0
@@ -743,33 +839,41 @@ class _TradingMixin:
             float(request.get("volume", 0.0) or 0.0),
             price,
         )
-        return float(margin or 0.0)
+        if margin is None:
+            return None
+        return float(margin)
+
+    def _resolve_tick_reference_price(self, symbol: str, order_type: int) -> float:
+        tick = self.symbol_info_tick(symbol)
+        if tick is None:
+            return 0.0
+        if _order_side(order_type):
+            return float(tick.get("ask", 0.0) or tick.get("bid", 0.0) or 0.0)
+        return float(tick.get("bid", 0.0) or tick.get("ask", 0.0) or 0.0)
 
     async def _resolve_order_check_price(self, request: Record, symbol_info: Record | None) -> float:
         if symbol_info is None:
             return 0.0
         action = int(request.get("action", 0) or 0)
         order_type = int(request.get("type", 0) or 0)
+        symbol = str(request.get("symbol", "") or "")
         if action == TRADE_ACTION_PENDING:
-            price = float(request.get("price_order", 0.0) or 0.0)
-            if order_type in {ORDER_TYPE_BUY_STOP_LIMIT, ORDER_TYPE_SELL_STOP_LIMIT}:
-                price = float(request.get("price_trigger", 0.0) or 0.0)
-            return price
+            if order_type in _STOP_LIMIT_ORDER_TYPES:
+                tick_price = self._resolve_tick_reference_price(symbol, order_type)
+                if tick_price > 0.0:
+                    return tick_price
+            return float(request.get("price_order", 0.0) or 0.0)
         price = float(request.get("price_order", 0.0) or request.get("price", 0.0) or 0.0)
         if price > 0.0:
             return price
-        tick = self.symbol_info_tick(str(request.get("symbol", "") or ""))
-        if tick is not None:
-            if _order_side(order_type):
-                return float(tick.get("ask", 0.0) or tick.get("bid", 0.0) or 0.0)
-            return float(tick.get("bid", 0.0) or tick.get("ask", 0.0) or 0.0)
-        return 0.0
+        return self._resolve_tick_reference_price(symbol, order_type)
 
     def _parse_trade_response(self, body: bytes, symbol: str, trade_action: int, volume: int) -> TradeResult:
         """Parse trade response body into TradeResult with full details."""
-        if not body:
-            tr = TradeResult(retcode=-1, description="Empty response", success=False)
-            logger.warning("trade_request %s action=%d vol=%d -> empty response", symbol, trade_action, volume)
+        if not body or len(body) < 4:
+            desc = "Empty response" if not body else f"Truncated response ({len(body)} bytes)"
+            tr = TradeResult(retcode=-1, description=desc, success=False)
+            logger.warning("trade_request %s action=%d vol=%d -> %s", symbol, trade_action, volume, desc.lower())
             return tr
         retcode = struct.unpack_from("<I", body, 0)[0]
         desc = TRADE_RETCODE_DESCRIPTIONS.get(retcode, f"Unknown retcode {retcode}")

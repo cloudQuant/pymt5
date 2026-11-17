@@ -1554,14 +1554,14 @@ async def test_find_conversion_symbol_name_fuzzy_match():
 
 
 async def test_find_conversion_symbol_name_starts_ends_match():
-    """_find_conversion_symbol_name matches via startswith/endswith (lines 681-686)."""
+    """_find_conversion_symbol_name matches delimited pairs without false suffix matches."""
     client = MT5WebClient()
     sym = SymbolInfo(name="EUR_USD_FX", symbol_id=99, digits=5)
     client._symbols = {"EUR_USD_FX": sym}
     client._symbols_by_id = {99: sym}
-    # No direct "EURUSD_FX" but EUR_USD_FX starts with EUR and ends with FX
-    result = await client._find_conversion_symbol_name("EUR", "FX")
-    assert result == "EUR_USD_FX"
+    # EUR_USD_FX has delimited tokens EUR/USD/FX so it matches EURUSD, not EURFX.
+    assert await client._find_conversion_symbol_name("EUR", "USD") == "EUR_USD_FX"
+    assert await client._find_conversion_symbol_name("EUR", "FX") is None
 
 
 async def test_find_conversion_symbol_name_loads_symbols():

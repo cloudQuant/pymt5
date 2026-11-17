@@ -27,8 +27,6 @@ jobs:
     environment: demo
     env:
       PYMT5_SERVER: ${{ vars.PYMT5_SERVER || 'wss://web.metatrader.app/terminal' }}
-      PYMT5_LOGIN: ${{ secrets.PYMT5_LOGIN }}
-      PYMT5_PASSWORD: ${{ secrets.PYMT5_PASSWORD }}
       PYMT5_TEST_SYMBOL: ${{ (github.event_name == 'workflow_dispatch' && inputs.symbol) || vars.PYMT5_TEST_SYMBOL || 'EURUSD' }}
       PYMT5_INTEGRATION: "1"
       PYMT5_REQUIRE_TICK: "1"
@@ -49,16 +47,9 @@ jobs:
           python - <<'PY'
           import os
 
-          missing = [name for name in ("PYMT5_SERVER", "PYMT5_LOGIN", "PYMT5_PASSWORD") if not os.environ.get(name)]
-          if missing:
-              raise SystemExit("Missing demo configuration: " + ", ".join(missing))
-          try:
-              login = int(os.environ["PYMT5_LOGIN"])
-          except ValueError:
-              raise SystemExit("PYMT5_LOGIN must be an integer") from None
-          if login <= 0:
-              raise SystemExit("PYMT5_LOGIN must be a positive integer")
-          if not os.environ["PYMT5_TEST_SYMBOL"].strip():
+          if not os.environ.get("PYMT5_SERVER"):
+              raise SystemExit("Missing demo configuration: PYMT5_SERVER")
+          if not os.environ.get("PYMT5_TEST_SYMBOL", "").strip():
               raise SystemExit("PYMT5_TEST_SYMBOL must not be empty")
           PY
 
@@ -68,4 +59,22 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Run read-only demo integration tests
-        run: python -m pytest -p pytest_asyncio.plugin tests/test_integration.py -v --tb=short
+        shell: bash
+        env:
+          PYMT5_LOGIN: ${{ secrets.PYMT5_LOGIN }}
+          PYMT5_PASSWORD: ${{ secrets.PYMT5_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os
+
+          missing = [name for name in ("PYMT5_LOGIN", "PYMT5_PASSWORD") if not os.environ.get(name)]
+          if missing:
+              raise SystemExit("Missing demo credentials: " + ", ".join(missing))
+          try:
+              login = int(os.environ["PYMT5_LOGIN"])
+          except ValueError:
+              raise SystemExit("PYMT5_LOGIN must be an integer") from None
+          if login <= 0:
+              raise SystemExit("PYMT5_LOGIN must be a positive integer")
+          PY
+          python -m pytest -p pytest_asyncio.plugin tests/test_integration.py -v --tb=short

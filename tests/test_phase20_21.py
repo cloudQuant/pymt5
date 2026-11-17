@@ -448,7 +448,7 @@ class TestOrderValidation:
             )
 
     async def test_volume_encoding_overflow_raises(self):
-        """Test that negative volume encoding result raises ValidationError."""
+        """Test that negative and overflowing volume encoding results raise ValidationError."""
         from pymt5._trading import _TradingMixin
 
         obj = object.__new__(_TradingMixin)
@@ -465,8 +465,11 @@ class TestOrderValidation:
         obj._resolve_digits = mock_resolve_digits
         obj._volume_to_lots = staticmethod(mock_volume_to_lots)
 
-        with pytest.raises(ValidationError, match="volume encoding overflow"):
+        with pytest.raises(ValidationError, match="finite non-negative"):
             await obj.order_send({"action": TRADE_ACTION_DEAL, "symbol": "EURUSD", "volume": -0.01})
+
+        with pytest.raises(ValidationError, match="volume encoding overflow"):
+            await obj.order_send({"action": TRADE_ACTION_DEAL, "symbol": "EURUSD", "volume": 1.0})
 
 
 # =====================================================================

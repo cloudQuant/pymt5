@@ -49,12 +49,16 @@ lookups. ``subscribe_symbols()`` and ``subscribe_book_by_name()`` require this
 cache and raise ``SymbolNotFoundError`` for missing names.
 
 With a positive ``symbol_cache_ttl``, ``load_symbols()`` can reuse a fresh basic
-cache. Call ``invalidate_symbol_cache()`` to force the next load to refresh it.
+cache. Call ``invalidate_symbol_cache()`` to clear both basic symbol metadata and
+cached full-symbol (``cmd=18``) records so subsequent lookups refresh.
 ``symbol_info(name)`` is the detailed, official-style interface; it normally
 uses full-symbol data and caches returned records. ``get_full_symbol_info(name)``
 explicitly queries cmd=18 and returns ``None`` only when the symbol is absent.
 A rejected, malformed, or mismatched full-symbol response raises
 ``ProtocolError`` instead of being treated as a missing symbol.
+``get_symbols(use_gzip=True)``, ``get_symbol_groups()``, and ``get_spreads()``
+likewise raise ``ProtocolError`` on decompression failures or nonzero server
+response codes.
 
 .. code-block:: python
 
@@ -167,9 +171,11 @@ changed.
 Choose tick price scaling explicitly
 ------------------------------------
 
-Ticks can contain partial updates. Zero-valued bid, ask, or last fields are
-filled from the previous cached values when available. Price normalization is
-controlled by ``tick_price_mode``:
+Ticks can contain partial updates, including multiple partial records for the
+same symbol within a single ``cmd=8`` batch. Zero-valued bid, ask, or last
+fields are filled in-order from earlier records in the same batch or from the
+previous cached values when available. Price normalization is controlled by
+``tick_price_mode``:
 
 ``"scaled"``
    Divide every nonzero price by ``10 ** symbol.digits``.
@@ -232,6 +238,9 @@ Read depth of market
 
 Book callbacks receive records with ``symbol_id``, optional ``symbol``,
 ``bids``, and ``asks``. Each level contains ``price`` and ``volume``.
+``subscribe_book()`` and ``unsubscribe_book()`` serialize concurrent updates,
+raise ``ProtocolError`` on nonzero response codes, and retain the last
+confirmed book subscription set and local caches when rejected.
 ``market_book_get()`` is only the latest local cache entry, not a freshness or
 completeness guarantee. ``market_book_add()`` and ``market_book_release()`` are
 subscription aliases. ``subscribe_book_managed()`` provides managed cleanup;

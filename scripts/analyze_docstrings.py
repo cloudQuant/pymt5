@@ -51,9 +51,9 @@ from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 
 # Fix Windows console encoding issue
-if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
 def find_python_files(root_dir: str, exclude_dirs: Optional[List[str]] = None) -> List[str]:
@@ -67,18 +67,29 @@ def find_python_files(root_dir: str, exclude_dirs: Optional[List[str]] = None) -
         List of Python file paths.
     """
     if exclude_dirs is None:
-        exclude_dirs = ['docs', '__pycache__', '.git', '.tox', 'build', 'dist',
-                        'egg-info', '.eggs', 'venv', 'env', 'node_modules']
+        exclude_dirs = [
+            "docs",
+            "__pycache__",
+            ".git",
+            ".tox",
+            "build",
+            "dist",
+            "egg-info",
+            ".eggs",
+            "venv",
+            "env",
+            "node_modules",
+        ]
 
     python_files = []
     root_path = Path(root_dir)
 
     for dirpath, dirnames, filenames in os.walk(root_path):
         # Modify dirnames in-place to skip excluded directories
-        dirnames[:] = [d for d in dirnames if d not in exclude_dirs and not d.endswith('.egg-info')]
+        dirnames[:] = [d for d in dirnames if d not in exclude_dirs and not d.endswith(".egg-info")]
 
         for filename in filenames:
-            if filename.endswith('.py'):
+            if filename.endswith(".py"):
                 python_files.append(os.path.join(dirpath, filename))
 
     return sorted(python_files)
@@ -95,10 +106,21 @@ def collect_python_files(targets: List[str], exclude_dirs: Optional[List[str]] =
         Sorted list of python file paths.
     """
     if exclude_dirs is None:
-        exclude_dirs = ['docs', '__pycache__', '.git', '.tox', 'build', 'dist',
-                        'egg-info', '.eggs', 'venv', 'env', 'node_modules']
+        exclude_dirs = [
+            "docs",
+            "__pycache__",
+            ".git",
+            ".tox",
+            "build",
+            "dist",
+            "egg-info",
+            ".eggs",
+            "venv",
+            "env",
+            "node_modules",
+        ]
 
-    ignored_targets = {'|', '│', '├', '└', '┌', '┐', '├──', '└──'}
+    ignored_targets = {"|", "│", "├", "└", "┌", "┐", "├──", "└──"}
     files = []
     for target in targets:
         if str(target).strip() in ignored_targets:
@@ -108,7 +130,7 @@ def collect_python_files(targets: List[str], exclude_dirs: Optional[List[str]] =
             continue
         if target_path.is_dir():
             files.extend(find_python_files(str(target_path), exclude_dirs=exclude_dirs))
-        elif target_path.is_file() and target_path.suffix == '.py':
+        elif target_path.is_file() and target_path.suffix == ".py":
             files.append(str(target_path))
     return sorted(set(files))
 
@@ -126,7 +148,7 @@ def select_recommended_file(root_dir: str, target_files: Optional[List[str]] = N
     paths = target_files if target_files else [root_dir]
     candidates = []
     for result in [quick_analyze(fp) for fp in collect_python_files(paths)]:
-        if result.get('needs_work'):
+        if result.get("needs_work"):
             candidates.append(result)
 
     if not candidates:
@@ -137,10 +159,10 @@ def select_recommended_file(root_dir: str, target_files: Optional[List[str]] = N
 
     candidates.sort(
         key=lambda item: (
-            int(is_test_file(item['filepath'])),
-            -(item.get('missing_docstrings', 0) + item.get('chinese_comments', 0)),
+            is_test_file(item["filepath"]),
+            -(item.get("missing_docstrings", 0) + item.get("chinese_comments", 0)),
+            item["filepath"],
         ),
-        reverse=True,
     )
     return candidates[0]
 
@@ -159,49 +181,46 @@ def quick_analyze(filepath: str) -> Dict[str, Any]:
         ast_results = analyze_ast(filepath)
         chinese_comments = find_chinese_comments(filepath)
 
-        if 'error' in ast_results:
+        if "error" in ast_results:
             return {
-                'filepath': filepath,
-                'error': ast_results['error'],
-                'total_lines': total_lines,
+                "filepath": filepath,
+                "error": ast_results["error"],
+                "total_lines": total_lines,
             }
 
         # Count missing docstrings
-        missing_module = 0 if ast_results['module_docstring'] else 1
+        missing_module = 0 if ast_results["module_docstring"] else 1
 
-        public_classes = [c for c in ast_results['classes'] if c['is_public']]
-        missing_classes = len([c for c in public_classes if not c['has_docstring']])
+        public_classes = [c for c in ast_results["classes"] if c["is_public"]]
+        missing_classes = len([c for c in public_classes if not c["has_docstring"]])
 
-        important_dunders = {'__init__', '__new__', '__call__', '__enter__', '__exit__'}
-        public_methods = [
-            m for m in ast_results['methods']
-            if m['is_public'] or m['name'] in important_dunders
-        ]
-        missing_methods = len([m for m in public_methods if not m['has_docstring']])
+        important_dunders = {"__init__", "__new__", "__call__", "__enter__", "__exit__"}
+        public_methods = [m for m in ast_results["methods"] if m["is_public"] or m["name"] in important_dunders]
+        missing_methods = len([m for m in public_methods if not m["has_docstring"]])
 
-        public_functions = [f for f in ast_results['functions'] if f['is_public']]
-        missing_functions = len([f for f in public_functions if not f['has_docstring']])
+        public_functions = [f for f in ast_results["functions"] if f["is_public"]]
+        missing_functions = len([f for f in public_functions if not f["has_docstring"]])
 
         total_missing = missing_module + missing_classes + missing_methods + missing_functions
 
         return {
-            'filepath': filepath,
-            'total_lines': total_lines,
-            'missing_docstrings': total_missing,
-            'chinese_comments': len(chinese_comments),
-            'needs_work': total_missing > 0 or len(chinese_comments) > 0,
+            "filepath": filepath,
+            "total_lines": total_lines,
+            "missing_docstrings": total_missing,
+            "chinese_comments": len(chinese_comments),
+            "needs_work": total_missing > 0 or len(chinese_comments) > 0,
         }
     except Exception as e:
         return {
-            'filepath': filepath,
-            'error': str(e),
-            'total_lines': 0,
+            "filepath": filepath,
+            "error": str(e),
+            "total_lines": 0,
         }
 
 
 def count_lines(filepath: str) -> int:
     """Count total lines in a file."""
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         return sum(1 for _ in f)
 
 
@@ -225,7 +244,7 @@ def strip_path_like_tokens(text: str) -> str:
     Returns:
         str: ``text`` with every path-like token replaced by a single space.
     """
-    return _PATH_LIKE_TOKEN_RE.sub(' ', text)
+    return _PATH_LIKE_TOKEN_RE.sub(" ", text)
 
 
 def find_chinese_comments(filepath: str) -> List[Tuple[int, str]]:
@@ -245,12 +264,12 @@ def find_chinese_comments(filepath: str) -> List[Tuple[int, str]]:
         List of tuples (line_number, line_content) containing Chinese in
         ``#`` comments or docstrings.
     """
-    chinese_pattern = re.compile(r'[\u4e00-\u9fa5]')
+    chinese_pattern = re.compile(r"[\u4e00-\u9fa5]")
     chinese_lines: List[Tuple[int, str]] = []
     seen_lines = set()
 
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             source = f.read()
     except (OSError, UnicodeDecodeError):
         return chinese_lines
@@ -258,9 +277,7 @@ def find_chinese_comments(filepath: str) -> List[Tuple[int, str]]:
     # 1) ``#`` comments: exact COMMENT tokens from tokenize.
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):
-            if tok.type == tokenize.COMMENT and chinese_pattern.search(
-                strip_path_like_tokens(tok.string)
-            ):
+            if tok.type == tokenize.COMMENT and chinese_pattern.search(strip_path_like_tokens(tok.string)):
                 if tok.start[0] not in seen_lines:
                     seen_lines.add(tok.start[0])
                     chinese_lines.append((tok.start[0], tok.string))
@@ -268,9 +285,7 @@ def find_chinese_comments(filepath: str) -> List[Tuple[int, str]]:
         # Fall back to a line-based comment scan for files tokenize cannot read.
         for line_num, line in enumerate(source.splitlines(), 1):
             stripped = line.strip()
-            if stripped.startswith('#') and chinese_pattern.search(
-                strip_path_like_tokens(stripped)
-            ):
+            if stripped.startswith("#") and chinese_pattern.search(strip_path_like_tokens(stripped)):
                 if line_num not in seen_lines:
                     seen_lines.add(line_num)
                     chinese_lines.append((line_num, line.rstrip()))
@@ -286,27 +301,25 @@ def find_chinese_comments(filepath: str) -> List[Tuple[int, str]]:
         tree = None
     if tree is not None:
         for node in ast.walk(tree):
-            if isinstance(
-                node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-            ):
-                doc_node = node.body[0].value if (
-                    node.body
-                    and isinstance(node.body[0], ast.Expr)
-                    and isinstance(node.body[0].value, ast.Constant)
-                    and isinstance(node.body[0].value.value, str)
-                ) else None
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc_node = (
+                    node.body[0].value
+                    if (
+                        node.body
+                        and isinstance(node.body[0], ast.Expr)
+                        and isinstance(node.body[0].value, ast.Constant)
+                        and isinstance(node.body[0].value.value, str)
+                    )
+                    else None
+                )
                 if doc_node is None:
                     continue
                 text = doc_node.value or ""
                 if chinese_pattern.search(strip_path_like_tokens(text)):
-                    docstring_lines.update(
-                        range(doc_node.lineno, doc_node.end_lineno + 1)
-                    )
+                    docstring_lines.update(range(doc_node.lineno, doc_node.end_lineno + 1))
                     if doc_node.lineno not in seen_lines:
                         seen_lines.add(doc_node.lineno)
-                        chinese_lines.append(
-                            (doc_node.lineno, source.splitlines()[doc_node.lineno - 1].rstrip())
-                        )
+                        chinese_lines.append((doc_node.lineno, source.splitlines()[doc_node.lineno - 1].rstrip()))
 
     return sorted(chinese_lines, key=lambda item: item[0])
 
@@ -320,54 +333,60 @@ def analyze_ast(filepath: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing analysis results.
     """
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         source = f.read()
 
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
-        return {'error': f'Syntax error: {e}'}
+        return {"error": f"Syntax error: {e}"}
 
     results = {
-        'module_docstring': ast.get_docstring(tree) is not None,
-        'classes': [],
-        'functions': [],
-        'methods': [],
+        "module_docstring": ast.get_docstring(tree) is not None,
+        "classes": [],
+        "functions": [],
+        "methods": [],
     }
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             has_docstring = ast.get_docstring(node) is not None
-            results['classes'].append({
-                'name': node.name,
-                'line': node.lineno,
-                'has_docstring': has_docstring,
-                'is_public': not node.name.startswith('_'),
-            })
+            results["classes"].append(
+                {
+                    "name": node.name,
+                    "line": node.lineno,
+                    "has_docstring": has_docstring,
+                    "is_public": not node.name.startswith("_"),
+                }
+            )
 
             # Check methods within the class
             for item in node.body:
                 if isinstance(item, ast.FunctionDef) or isinstance(item, ast.AsyncFunctionDef):
                     method_has_docstring = ast.get_docstring(item) is not None
-                    results['methods'].append({
-                        'name': item.name,
-                        'class': node.name,
-                        'line': item.lineno,
-                        'has_docstring': method_has_docstring,
-                        'is_public': not item.name.startswith('_'),
-                        'is_dunder': item.name.startswith('__') and item.name.endswith('__'),
-                    })
+                    results["methods"].append(
+                        {
+                            "name": item.name,
+                            "class": node.name,
+                            "line": item.lineno,
+                            "has_docstring": method_has_docstring,
+                            "is_public": not item.name.startswith("_"),
+                            "is_dunder": item.name.startswith("__") and item.name.endswith("__"),
+                        }
+                    )
 
         elif isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
             # Top-level functions only
-            if hasattr(node, 'col_offset') and node.col_offset == 0:
+            if hasattr(node, "col_offset") and node.col_offset == 0:
                 has_docstring = ast.get_docstring(node) is not None
-                results['functions'].append({
-                    'name': node.name,
-                    'line': node.lineno,
-                    'has_docstring': has_docstring,
-                    'is_public': not node.name.startswith('_'),
-                })
+                results["functions"].append(
+                    {
+                        "name": node.name,
+                        "line": node.lineno,
+                        "has_docstring": has_docstring,
+                        "is_public": not node.name.startswith("_"),
+                    }
+                )
 
     return results
 
@@ -415,9 +434,9 @@ def generate_report(filepath: str, verbose: bool = False) -> str:
     segments = suggest_segments(total_lines)
 
     report_lines = []
-    report_lines.append(f"\n{'='*60}")
+    report_lines.append(f"\n{'=' * 60}")
     report_lines.append(f"Analysis Report: {path.name}")
-    report_lines.append(f"{'='*60}")
+    report_lines.append(f"{'=' * 60}")
     report_lines.append(f"File path: {filepath}")
     report_lines.append(f"Total lines: {total_lines}")
 
@@ -430,27 +449,27 @@ def generate_report(filepath: str, verbose: bool = False) -> str:
         report_lines.append("Processing mode: Single pass (file <= 500 lines)")
 
     # Check for errors
-    if 'error' in ast_results:
+    if "error" in ast_results:
         report_lines.append(f"\n[ERROR] {ast_results['error']}")
-        return '\n'.join(report_lines)
+        return "\n".join(report_lines)
 
     # Missing docstrings section
-    report_lines.append(f"\n{'─'*40}")
+    report_lines.append(f"\n{'─' * 40}")
     report_lines.append("[Missing Docstrings]")
-    report_lines.append(f"{'─'*40}")
+    report_lines.append(f"{'─' * 40}")
 
     missing_count = 0
 
     # Module docstring
-    if not ast_results['module_docstring']:
+    if not ast_results["module_docstring"]:
         report_lines.append("❌ Module docstring: MISSING")
         missing_count += 1
     elif verbose:
         report_lines.append("✓ Module docstring: Present")
 
     # Classes
-    public_classes = [c for c in ast_results['classes'] if c['is_public']]
-    missing_classes = [c for c in public_classes if not c['has_docstring']]
+    public_classes = [c for c in ast_results["classes"] if c["is_public"]]
+    missing_classes = [c for c in public_classes if not c["has_docstring"]]
 
     if missing_classes:
         report_lines.append(f"\nMissing class docstrings ({len(missing_classes)}):")
@@ -461,20 +480,17 @@ def generate_report(filepath: str, verbose: bool = False) -> str:
         report_lines.append(f"\n✓ All {len(public_classes)} public classes have docstrings")
 
     # Methods - only public methods (excluding dunder methods except important ones)
-    important_dunders = {'__init__', '__new__', '__call__', '__enter__', '__exit__'}
+    important_dunders = {"__init__", "__new__", "__call__", "__enter__", "__exit__"}
 
-    public_methods = [
-        m for m in ast_results['methods']
-        if m['is_public'] or m['name'] in important_dunders
-    ]
-    missing_methods = [m for m in public_methods if not m['has_docstring']]
+    public_methods = [m for m in ast_results["methods"] if m["is_public"] or m["name"] in important_dunders]
+    missing_methods = [m for m in public_methods if not m["has_docstring"]]
 
     if missing_methods:
         report_lines.append(f"\nMissing method docstrings ({len(missing_methods)}):")
         # Group by class
         by_class = {}
         for m in missing_methods:
-            cls = m['class']
+            cls = m["class"]
             if cls not in by_class:
                 by_class[cls] = []
             by_class[cls].append(m)
@@ -491,8 +507,8 @@ def generate_report(filepath: str, verbose: bool = False) -> str:
         report_lines.append(f"\n✓ All {len(public_methods)} public methods have docstrings")
 
     # Functions
-    public_functions = [f for f in ast_results['functions'] if f['is_public']]
-    missing_functions = [f for f in public_functions if not f['has_docstring']]
+    public_functions = [f for f in ast_results["functions"] if f["is_public"]]
+    missing_functions = [f for f in public_functions if not f["has_docstring"]]
 
     if missing_functions:
         report_lines.append(f"\nMissing function docstrings ({len(missing_functions)}):")
@@ -503,15 +519,15 @@ def generate_report(filepath: str, verbose: bool = False) -> str:
         report_lines.append(f"\n✓ All {len(public_functions)} public functions have docstrings")
 
     # Chinese comments section
-    report_lines.append(f"\n{'─'*40}")
+    report_lines.append(f"\n{'─' * 40}")
     report_lines.append("[Chinese Comments to Translate]")
-    report_lines.append(f"{'─'*40}")
+    report_lines.append(f"{'─' * 40}")
 
     if chinese_comments:
         report_lines.append(f"Found {len(chinese_comments)} lines with Chinese characters:")
         for line_num, content in chinese_comments[:20]:  # Limit display
             # Truncate long lines
-            display = content[:80] + '...' if len(content) > 80 else content
+            display = content[:80] + "..." if len(content) > 80 else content
             report_lines.append(f"  Line {line_num}: {display}")
         if len(chinese_comments) > 20:
             report_lines.append(f"  ... and {len(chinese_comments) - 20} more lines")
@@ -519,9 +535,9 @@ def generate_report(filepath: str, verbose: bool = False) -> str:
         report_lines.append("✓ No Chinese comments found")
 
     # Summary
-    report_lines.append(f"\n{'─'*40}")
+    report_lines.append(f"\n{'─' * 40}")
     report_lines.append("[Summary]")
-    report_lines.append(f"{'─'*40}")
+    report_lines.append(f"{'─' * 40}")
     report_lines.append(f"Missing docstrings: {missing_count}")
     report_lines.append(f"Chinese comments: {len(chinese_comments)}")
 
@@ -530,9 +546,9 @@ def generate_report(filepath: str, verbose: bool = False) -> str:
     else:
         report_lines.append(f"\n⚠️  Total items to address: {missing_count + len(chinese_comments)}")
 
-    report_lines.append(f"\n{'='*60}\n")
+    report_lines.append(f"\n{'=' * 60}\n")
 
-    return '\n'.join(report_lines)
+    return "\n".join(report_lines)
 
 
 def batch_analyze(
@@ -551,9 +567,9 @@ def batch_analyze(
             the listing table and detailed reports. Totals always
             reflect all files.
     """
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"Scanning Python files in: {root_dir}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     python_files = find_python_files(root_dir)
     print(f"Found {len(python_files)} Python files\n")
@@ -565,31 +581,31 @@ def batch_analyze(
         results.append(result)
 
     # Separate files needing work
-    needs_work = [r for r in results if r.get('needs_work', False)]
-    has_errors = [r for r in results if 'error' in r]
-    all_good = [r for r in results if not r.get('needs_work', False) and 'error' not in r]
+    needs_work = [r for r in results if r.get("needs_work", False)]
+    has_errors = [r for r in results if "error" in r]
+    all_good = [r for r in results if not r.get("needs_work", False) and "error" not in r]
 
     # Print summary table
-    print(f"{'─'*70}")
+    print(f"{'─' * 70}")
     print(f"{'FILE SUMMARY':^70}")
-    print(f"{'─'*70}")
+    print(f"{'─' * 70}")
     print(f"{'Status':<12} {'Count':>8}")
-    print(f"{'─'*70}")
+    print(f"{'─' * 70}")
     print(f"{'✅ Good':<12} {len(all_good):>8}")
     print(f"{'⚠️  Needs work':<12} {len(needs_work):>8}")
     print(f"{'❌ Errors':<12} {len(has_errors):>8}")
-    print(f"{'─'*70}")
+    print(f"{'─' * 70}")
     print(f"{'Total':<12} {len(results):>8}")
-    print(f"{'─'*70}\n")
+    print(f"{'─' * 70}\n")
 
     # Show files needing work
     if needs_work:
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         print(f"FILES NEEDING OPTIMIZATION ({len(needs_work)} files)")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         # Sort by total issues (most issues first)
-        needs_work.sort(key=lambda x: x.get('missing_docstrings', 0) + x.get('chinese_comments', 0), reverse=True)
+        needs_work.sort(key=lambda x: x.get("missing_docstrings", 0) + x.get("chinese_comments", 0), reverse=True)
 
         # Apply limit (clamp to >= 0; None means unlimited)
         displayed = needs_work if limit is None else needs_work[: max(limit, 0) :]
@@ -597,19 +613,21 @@ def batch_analyze(
 
         # Print table header
         print(f"\n{'File':<50} {'Lines':>6} {'Missing':>8} {'Chinese':>8}")
-        print(f"{'─'*70}")
+        print(f"{'─' * 70}")
 
         for r in displayed:
-            rel_path = os.path.relpath(r['filepath'], root_dir)
+            rel_path = os.path.relpath(r["filepath"], root_dir)
             if len(rel_path) > 48:
-                rel_path = '...' + rel_path[-45:]
-            print(f"{rel_path:<50} {r['total_lines']:>6} {r.get('missing_docstrings', 0):>8} {r.get('chinese_comments', 0):>8}")
+                rel_path = "..." + rel_path[-45:]
+            print(
+                f"{rel_path:<50} {r['total_lines']:>6} {r.get('missing_docstrings', 0):>8} {r.get('chinese_comments', 0):>8}"
+            )
 
-        print(f"{'─'*70}")
+        print(f"{'─' * 70}")
 
         # Calculate totals (always over all non-compliant files)
-        total_missing = sum(r.get('missing_docstrings', 0) for r in needs_work)
-        total_chinese = sum(r.get('chinese_comments', 0) for r in needs_work)
+        total_missing = sum(r.get("missing_docstrings", 0) for r in needs_work)
+        total_chinese = sum(r.get("chinese_comments", 0) for r in needs_work)
         print(f"{'TOTAL':<50} {'':<6} {total_missing:>8} {total_chinese:>8}")
 
         if hidden > 0:
@@ -618,27 +636,27 @@ def batch_analyze(
 
         # Show detailed reports if not summary only
         if not summary_only and verbose:
-            print(f"\n{'='*70}")
+            print(f"\n{'=' * 70}")
             print("DETAILED REPORTS")
-            print(f"{'='*70}")
+            print(f"{'=' * 70}")
             for r in displayed:
-                print(generate_report(r['filepath'], verbose=False))
+                print(generate_report(r["filepath"], verbose=False))
             if hidden > 0:
                 print(f"\n... and {hidden} more files. Run with specific file for details.")
 
     # Show errors if any
     if has_errors:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print(f"FILES WITH ERRORS ({len(has_errors)} files)")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         for r in has_errors:
-            rel_path = os.path.relpath(r['filepath'], root_dir)
+            rel_path = os.path.relpath(r["filepath"], root_dir)
             print(f"  {rel_path}: {r.get('error', 'Unknown error')}")
 
     # Final summary
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("SUMMARY")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     if not needs_work and not has_errors:
         print("✅ All files are fully documented!")
     else:
@@ -648,13 +666,13 @@ def batch_analyze(
             print(f"   - Total Chinese comments: {total_chinese}")
         if has_errors:
             print(f"❌ {len(has_errors)} files have syntax errors")
-    print(f"{'='*70}\n")
+    print(f"{'=' * 70}\n")
 
 
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Analyze Python files for missing docstrings and Chinese comments.',
+        description="Analyze Python files for missing docstrings and Chinese comments.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -672,42 +690,25 @@ Examples:
 
   # Limit non-compliant file list to top 5
   python scripts/analyze_docstrings.py --limit 5
-        """
+        """,
+    )
+    parser.add_argument("files", nargs="*", help="Python file(s) to analyze. If not specified, checks all files.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed reports for files needing work")
+    parser.add_argument("-s", "--summary", action="store_true", help="Only show summary table, no detailed reports")
+    parser.add_argument("-d", "--directory", default=".", help="Root directory to search (default: current directory)")
+    parser.add_argument(
+        "--recommend", action="store_true", help="Recommend one file that needs optimization and print detailed report"
     )
     parser.add_argument(
-        'files',
-        nargs='*',
-        help='Python file(s) to analyze. If not specified, checks all files.'
-    )
-    parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help='Show detailed reports for files needing work'
-    )
-    parser.add_argument(
-        '-s', '--summary',
-        action='store_true',
-        help='Only show summary table, no detailed reports'
-    )
-    parser.add_argument(
-        '-d', '--directory',
-        default='.',
-        help='Root directory to search (default: current directory)'
-    )
-    parser.add_argument(
-        '--recommend',
-        action='store_true',
-        help='Recommend one file that needs optimization and print detailed report'
-    )
-    parser.add_argument(
-        '-n', '--limit',
+        "-n",
+        "--limit",
         type=int,
         default=None,
-        metavar='N',
-        help='Limit the number of non-compliant files to display (default: show all)'
+        metavar="N",
+        help="Limit the number of non-compliant files to display (default: show all)",
     )
 
-    if hasattr(parser, 'parse_intermixed_args'):
+    if hasattr(parser, "parse_intermixed_args"):
         args = parser.parse_intermixed_args()
     else:  # pragma: no cover - fallback for older Python versions
         args = parser.parse_args()
@@ -729,7 +730,7 @@ Examples:
                 print(f"No files need optimization in the selected targets ({root}).")
             return
 
-        filepath = recommended['filepath']
+        filepath = recommended["filepath"]
         print("\n" + "=" * 70)
         print("Recommended file for optimization:")
         print(f"{filepath}")
@@ -759,5 +760,5 @@ Examples:
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -2,6 +2,7 @@
 Live test v2: proper flow with init_session, cmd=34 gzip symbols, drain pushes.
 Flow: bootstrap → login → drain pushes → init_session → get_symbols(gzip) → get_positions → get_rates
 """
+
 import asyncio
 import gzip
 import logging
@@ -16,10 +17,18 @@ os.environ["no_proxy"] = "*"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pymt5.crypto import AESCipher, initial_cipher
+from pymt5.exceptions import MT5ConnectionError
 from pymt5.protocol import build_command, pack_outer, parse_response_frame, unpack_outer, SeriesCodec, get_series_size
 from pymt5.helpers import build_client_id
 from pymt5.constants import CMD_BOOTSTRAP, CMD_LOGIN, CMD_PING
-from pymt5.schemas import SYMBOL_BASIC_SCHEMA, SYMBOL_BASIC_FIELD_NAMES, POSITION_SCHEMA, POSITION_FIELD_NAMES, ORDER_SCHEMA, ORDER_FIELD_NAMES
+from pymt5.schemas import (
+    SYMBOL_BASIC_SCHEMA,
+    SYMBOL_BASIC_FIELD_NAMES,
+    POSITION_SCHEMA,
+    POSITION_FIELD_NAMES,
+    ORDER_SCHEMA,
+    ORDER_FIELD_NAMES,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("v2")
@@ -101,162 +110,185 @@ async def main():
     # 1. Connect
     log.info("=== 1. Connect ===")
     ws = await asyncio.wait_for(
-        websockets.connect(WS_URI, ping_interval=None, max_size=None,
-                           open_timeout=15,
-                           additional_headers={"Origin": "https://web.metatrader.app"}),
+        websockets.connect(
+            WS_URI,
+            ping_interval=None,
+            max_size=None,
+            open_timeout=15,
+            additional_headers={"Origin": "https://web.metatrader.app"},
+        ),
         timeout=15,
     )
     log.info("WS connected")
 
-    # 2. Bootstrap
-    cipher = initial_cipher()
-    inner = build_command(CMD_BOOTSTRAP, bytes(64))
-    await ws.send(pack_outer(cipher.encrypt(inner)))
-    raw = bytes(await asyncio.wait_for(ws.recv(), timeout=10))
-    _, _, enc = unpack_outer(raw)
-    frame = parse_response_frame(cipher.decrypt(enc))
-    log.info(f"Bootstrap: cmd={frame.command}, code={frame.code}")
-    assert frame.code == 0
-    cipher = AESCipher(frame.body[66:])
-    session = RawSession(ws, cipher)
+    try:
+        # 2. Bootstrap
+        cipher = initial_cipher()
+        inner = build_command(CMD_BOOTSTRAP, bytes(64))
+        await ws.send(pack_outer(cipher.encrypt(inner)))
+        raw = bytes(await asyncio.wait_for(ws.recv(), timeout=10))
+        _, _, enc = unpack_outer(raw)
+        frame = parse_response_frame(cipher.decrypt(enc))
+        log.info(f"Bootstrap: cmd={frame.command}, code={frame.code}")
+        if frame.code != 0 or len(frame.body) < 82:
+            raise MT5ConnectionError(f"Bootstrap failed: code={frame.code}, body_len={len(frame.body)}")
+        key_material = frame.body[66:]
+        if len(key_material) not in (16, 24, 32):
+            raise MT5ConnectionError(f"Bootstrap invalid AES key length: {len(key_material)} bytes")
+        cipher = AESCipher(key_material)
+        session = RawSession(ws, cipher)
 
-    # 3. Login
-    log.info("=== 2. Login ===")
-    from pymt5.client import MT5WebClient
-    client = MT5WebClient()
-    payload = client._build_login_payload(
-        login=LOGIN_ID, password=PASSWORD, url="web.metatrader.app",
-        session=0, otp="", version=0, cid=build_client_id(),
-        lead_cookie_id=0, lead_affiliate_site="", utm_campaign="", utm_source="",
-    )
-    await session.send_cmd(CMD_LOGIN, payload)
-    frame = await session.recv_response(CMD_LOGIN, timeout=10)
-    if frame:
-        log.info(f"Login: cmd={frame.command}, code={frame.code}, body_len={len(frame.body)}")
-    else:
-        log.error("Login response not received")
-        await ws.close()
-        return
+        # 3. Login
+        log.info("=== 2. Login ===")
+        from pymt5.client import MT5WebClient
 
-    # 4. Drain post-login pushes (cmd=15 etc)
-    log.info("=== 3. Drain pushes ===")
-    n = await session.drain_pushes(duration=2)
-    log.info(f"Drained {n} pushes")
-
-    # 5. Init session (cmd=29)
-    log.info("=== 4. Init Session ===")
-    init_payload = client._build_init_payload(version=0, password="", otp="", cid=build_client_id())
-    await session.send_cmd(29, init_payload)
-    frame = await session.recv_response(29, timeout=10)
-    if frame:
-        log.info(f"Init: cmd={frame.command}, code={frame.code}")
-    else:
-        log.info("Init: no direct response (may be handled via push)")
-
-    # 6. Get symbols via cmd=34 (gzip compressed)
-    log.info("=== 5. Get Symbols (cmd=34, gzip) ===")
-    await session.send_cmd(34, b"")
-    frame = await session.recv_response(34, timeout=15)
-    if frame and frame.body:
-        log.info(f"Symbols gzip response: cmd={frame.command}, code={frame.code}, body_len={len(frame.body)}")
-        try:
-            # Response format: [4-byte something] + zlib/gzip compressed data
-            if len(frame.body) > 4:
-                compressed = bytes(frame.body[4:])
-                # Try zlib first (header 78 xx), then gzip
-                try:
-                    raw_data = zlib.decompress(compressed)
-                except zlib.error:
-                    raw_data = gzip.decompress(compressed)
-                log.info(f"Decompressed symbols: {len(raw_data)} bytes")
-                symbols = parse_symbols_from_body(raw_data)
-                log.info(f"Parsed {len(symbols)} symbols")
-                for s in symbols[:5]:
-                    log.info(f"  {s.get('symbol', '?'):20s} id={s.get('id', '?'):>6} digits={s.get('digits', '?')}")
-                if len(symbols) > 5:
-                    log.info(f"  ... and {len(symbols) - 5} more")
-            else:
-                log.info(f"Response body too short: {frame.body.hex()}")
-        except Exception as e:
-            log.error(f"Decompress failed: {e}")
-            log.info(f"Raw body hex: {frame.body.hex()}")
-    else:
-        log.info("No symbols response")
-        # Try cmd=6 as fallback
-        log.info("Trying cmd=6 (uncompressed)...")
-        await session.send_cmd(6, b"")
-        frame = await session.recv_response(6, timeout=10)
+        client = MT5WebClient()
+        payload = client._build_login_payload(
+            login=LOGIN_ID,
+            password=PASSWORD,
+            url="web.metatrader.app",
+            session=0,
+            otp="",
+            version=0,
+            cid=build_client_id(),
+            lead_cookie_id=0,
+            lead_affiliate_site="",
+            utm_campaign="",
+            utm_source="",
+        )
+        await session.send_cmd(CMD_LOGIN, payload)
+        frame = await session.recv_response(CMD_LOGIN, timeout=10)
         if frame:
-            log.info(f"cmd=6 response: body_len={len(frame.body)}, preview={frame.body[:20].hex()}")
+            log.info(f"Login: cmd={frame.command}, code={frame.code}, body_len={len(frame.body)}")
+        else:
+            log.error("Login response not received")
+            return
 
-    # 7. Get positions and orders (cmd=4)
-    log.info("=== 6. Get Positions & Orders (cmd=4) ===")
-    await session.send_cmd(4, b"")
-    frame = await session.recv_response(4, timeout=10)
-    if frame:
-        log.info(f"cmd=4 response: code={frame.code}, body_len={len(frame.body)}")
-        body = frame.body
-        if body and len(body) >= 4:
-            pos_count = struct.unpack_from("<I", body, 0)[0]
-            log.info(f"Position count: {pos_count}")
-            pos_size = get_series_size(POSITION_SCHEMA)
-            order_offset = 4 + pos_count * pos_size
-            if order_offset + 4 <= len(body):
-                order_count = struct.unpack_from("<I", body, order_offset)[0]
-                log.info(f"Order count: {order_count}")
-    else:
-        log.info("No cmd=4 response")
+        # 4. Drain post-login pushes (cmd=15 etc)
+        log.info("=== 3. Drain pushes ===")
+        n = await session.drain_pushes(duration=2)
+        log.info(f"Drained {n} pushes")
 
-    # 8. Get rates (cmd=11, EURUSD M1 last hour)
-    log.info("=== 7. Get Rates (cmd=11) ===")
-    from pymt5.constants import PROP_FIXED_STRING, PROP_U16, PROP_I32
-    now = int(time.time())
-    rates_payload = SeriesCodec.serialize([
-        (PROP_FIXED_STRING, "EURUSD", 64),
-        (PROP_U16, 1),  # M1
-        (PROP_I32, now - 3600),
-        (PROP_I32, now),
-    ])
-    await session.send_cmd(11, rates_payload)
-    frame = await session.recv_response(11, timeout=10)
-    if frame:
-        log.info(f"Rates response: code={frame.code}, body_len={len(frame.body)}")
-    else:
-        log.info("No rates response")
+        # 5. Init session (cmd=29)
+        log.info("=== 4. Init Session ===")
+        init_payload = client._build_init_payload(version=0, password="", otp="", cid=build_client_id())
+        await session.send_cmd(29, init_payload)
+        frame = await session.recv_response(29, timeout=10)
+        if frame:
+            log.info(f"Init: cmd={frame.command}, code={frame.code}")
+        else:
+            log.info("Init: no direct response (may be handled via push)")
 
-    # 9. Subscribe ticks (cmd=7)
-    log.info("=== 8. Subscribe Ticks (cmd=7) ===")
-    if 'symbols' in dir() and symbols:
-        sub_ids = [s["id"] for s in symbols[:3] if "id" in s]
-    else:
-        sub_ids = [1, 2, 3]
-    tick_payload = struct.pack(f"<{len(sub_ids)+1}I", len(sub_ids), *sub_ids)
-    await session.send_cmd(7, tick_payload)
-    # Read tick pushes (cmd=8) for a few seconds
-    log.info("Waiting for tick pushes (cmd=8)...")
-    end = time.time() + 5
-    tick_count = 0
-    while time.time() < end:
-        remaining = max(0.1, end - time.time())
-        try:
-            raw = bytes(await asyncio.wait_for(ws.recv(), timeout=remaining))
-            _, _, enc_body = unpack_outer(raw)
-            dec = cipher.decrypt(enc_body)
-            f = parse_response_frame(dec)
-            if f.command == 8:
-                tick_count += 1
-                if tick_count <= 3:
-                    log.info(f"  TICK push: body_len={len(f.body)}")
-            else:
-                log.info(f"  [other] cmd={f.command}, body_len={len(f.body)}")
-        except asyncio.TimeoutError:
-            break
-        except Exception as e:
-            log.error(f"Recv error: {e}")
-            break
-    log.info(f"Received {tick_count} tick pushes")
+        # 6. Get symbols via cmd=34 (gzip compressed)
+        log.info("=== 5. Get Symbols (cmd=34, gzip) ===")
+        symbols = []
+        await session.send_cmd(34, b"")
+        frame = await session.recv_response(34, timeout=15)
+        if frame and frame.body:
+            log.info(f"Symbols gzip response: cmd={frame.command}, code={frame.code}, body_len={len(frame.body)}")
+            try:
+                # Response format: [4-byte something] + zlib/gzip compressed data
+                if len(frame.body) > 4:
+                    compressed = bytes(frame.body[4:])
+                    # Try zlib first (header 78 xx), then gzip
+                    try:
+                        raw_data = zlib.decompress(compressed)
+                    except zlib.error:
+                        raw_data = gzip.decompress(compressed)
+                    log.info(f"Decompressed symbols: {len(raw_data)} bytes")
+                    symbols = parse_symbols_from_body(raw_data)
+                    log.info(f"Parsed {len(symbols)} symbols")
+                    for s in symbols[:5]:
+                        log.info(
+                            f"  {s.get('trade_symbol', '?'):20s} id={s.get('symbol_id', '?'):>6} "
+                            f"digits={s.get('digits', '?')}"
+                        )
+                    if len(symbols) > 5:
+                        log.info(f"  ... and {len(symbols) - 5} more")
+                else:
+                    log.info(f"Response body too short: {frame.body.hex()}")
+            except Exception as e:
+                log.error(f"Decompress failed: {e}")
+                log.info(f"Raw body hex: {frame.body.hex()}")
+        else:
+            log.info("No symbols response")
+            # Try cmd=6 as fallback
+            log.info("Trying cmd=6 (uncompressed)...")
+            await session.send_cmd(6, b"")
+            frame = await session.recv_response(6, timeout=10)
+            if frame:
+                log.info(f"cmd=6 response: body_len={len(frame.body)}, preview={frame.body[:20].hex()}")
 
-    await ws.close()
+        # 7. Get positions and orders (cmd=4)
+        log.info("=== 6. Get Positions & Orders (cmd=4) ===")
+        await session.send_cmd(4, b"")
+        frame = await session.recv_response(4, timeout=10)
+        if frame:
+            log.info(f"cmd=4 response: code={frame.code}, body_len={len(frame.body)}")
+            body = frame.body
+            if body and len(body) >= 4:
+                pos_count = struct.unpack_from("<I", body, 0)[0]
+                log.info(f"Position count: {pos_count}")
+                pos_size = get_series_size(POSITION_SCHEMA)
+                order_offset = 4 + pos_count * pos_size
+                if order_offset + 4 <= len(body):
+                    order_count = struct.unpack_from("<I", body, order_offset)[0]
+                    log.info(f"Order count: {order_count}")
+        else:
+            log.info("No cmd=4 response")
+
+        # 8. Get rates (cmd=11, EURUSD M1 last hour)
+        log.info("=== 7. Get Rates (cmd=11) ===")
+        from pymt5.constants import PROP_FIXED_STRING, PROP_U16, PROP_I32
+
+        now = int(time.time())
+        rates_payload = SeriesCodec.serialize(
+            [
+                (PROP_FIXED_STRING, "EURUSD", 64),
+                (PROP_U16, 1),  # M1
+                (PROP_I32, now - 3600),
+                (PROP_I32, now),
+            ]
+        )
+        await session.send_cmd(11, rates_payload)
+        frame = await session.recv_response(11, timeout=10)
+        if frame:
+            log.info(f"Rates response: code={frame.code}, body_len={len(frame.body)}")
+        else:
+            log.info("No rates response")
+
+        # 9. Subscribe ticks (cmd=7)
+        log.info("=== 8. Subscribe Ticks (cmd=7) ===")
+        sub_ids = [s["symbol_id"] for s in symbols if "symbol_id" in s][:3]
+        if not sub_ids:
+            sub_ids = [1, 2, 3]
+        tick_payload = struct.pack(f"<{len(sub_ids) + 1}I", len(sub_ids), *sub_ids)
+        await session.send_cmd(7, tick_payload)
+        # Read tick pushes (cmd=8) for a few seconds
+        log.info("Waiting for tick pushes (cmd=8)...")
+        end = time.time() + 5
+        tick_count = 0
+        while time.time() < end:
+            remaining = max(0.1, end - time.time())
+            try:
+                raw = bytes(await asyncio.wait_for(ws.recv(), timeout=remaining))
+                _, _, enc_body = unpack_outer(raw)
+                dec = cipher.decrypt(enc_body)
+                f = parse_response_frame(dec)
+                if f.command == 8:
+                    tick_count += 1
+                    if tick_count <= 3:
+                        log.info(f"  TICK push: body_len={len(f.body)}")
+                else:
+                    log.info(f"  [other] cmd={f.command}, body_len={len(f.body)}")
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                log.error(f"Recv error: {e}")
+                break
+        log.info(f"Received {tick_count} tick pushes")
+    finally:
+        await ws.close()
     log.info("=== ALL DONE ===")
 
 

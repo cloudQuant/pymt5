@@ -22,7 +22,7 @@ The most commonly used ``MT5WebClient`` constructor settings are:
        possible send isolates the connection; it is not a server ACK/NACK.
    * - ``heartbeat_interval``
      - ``30.0``
-     - Seconds between heartbeat pings after login.
+     - Positive finite interval in seconds between heartbeat pings after login.
    * - ``auto_reconnect``
      - ``False``
      - Reconnect and log in again after an unexpected disconnect.
@@ -34,7 +34,8 @@ The most commonly used ``MT5WebClient`` constructor settings are:
      - Base and cap for exponential backoff with jitter.
    * - ``rate_limit`` / ``rate_burst``
      - ``0`` / ``20``
-     - Optional token-bucket command throttling; zero disables the limit.
+     - Optional token-bucket command throttling (finite ``rate >= 0`` and
+       ``burst >= 1``); zero disables the limit.
    * - ``metrics``
      - ``None``
      - Optional ``MetricsCollector`` implementation.
@@ -95,8 +96,9 @@ Environment variables
    * - ``PYMT5_INTEGRATION=1``
      - Explicit opt-in to live integration tests; absent from the offline gate.
    * - ``PYMT5_LOG_LEVEL``
-     - Library log threshold. Avoid verbose credential/session logging in
-       captured reports.
+     - Library log threshold (defaults to ``WARNING``; unconfigured ``structlog``
+       bridges to stdlib ``logging``). Avoid verbose credential/session logging
+       in captured reports.
 
 The core client does not automatically load ``.env``. Use your application's
 secret manager or an explicit dotenv loader. Keep local environment files

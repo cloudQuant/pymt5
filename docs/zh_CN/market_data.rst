@@ -39,7 +39,7 @@
 
 ``load_symbols()`` 返回按名称索引的缓存副本。可使用 ``get_symbol_id()``、``get_symbol_info()`` 或 ``symbol_names`` 在本地查询。``subscribe_symbols()`` 和 ``subscribe_book_by_name()`` 依赖此缓存，名称不存在时会抛出 ``SymbolNotFoundError``。
 
-设置正的 ``symbol_cache_ttl`` 后，``load_symbols()`` 可以复用尚未过期的基础缓存。调用 ``invalidate_symbol_cache()`` 可强制下一次加载刷新缓存。``symbol_info(name)`` 是详细信息的官方风格接口，通常使用完整品种数据并缓存返回记录。``get_full_symbol_info(name)`` 显式查询 cmd=18，仅在品种不存在时返回 ``None``。服务器拒绝、响应格式错误或记录不匹配时会抛出 ``ProtocolError``，不会误报为品种不存在。
+设置正的 ``symbol_cache_ttl`` 后，``load_symbols()`` 可以复用尚未过期的基础缓存。调用 ``invalidate_symbol_cache()`` 会同时清空基础品种元数据与已缓存的完整品种（``cmd=18``）记录，强制下一次加载刷新缓存。``symbol_info(name)`` 是详细信息的官方风格接口，通常使用完整品种数据并缓存返回记录。``get_full_symbol_info(name)`` 显式查询 cmd=18，仅在品种不存在时返回 ``None``。服务器拒绝、响应格式错误或记录不匹配时会抛出 ``ProtocolError``，不会误报为品种不存在。``get_symbols(use_gzip=True)``、``get_symbol_groups()`` 与 ``get_spreads()`` 在解压失败或服务端返回非零响应码时同样会抛出 ``ProtocolError``。
 
 .. code-block:: python
 
@@ -129,7 +129,7 @@
 明确选择报价价格缩放方式
 ------------------------
 
-报价可能是部分更新。当缓存中有旧值时，bid、ask 或 last 中的零值会由之前的缓存值补齐。价格归一化由 ``tick_price_mode`` 控制：
+报价可能是部分更新，包括同一 ``cmd=8`` 批次内针对同一品种的多条部分更新记录。bid、ask 或 last 中的零值会按顺序由同一批次中先前记录或之前的缓存值补齐。价格归一化由 ``tick_price_mode`` 控制：
 
 ``"scaled"``
    将每个非零价格除以 ``10 ** symbol.digits``。
@@ -178,6 +178,6 @@
    finally:
        await client.market_book_release("EURUSD")
 
-深度行情回调接收包含 ``symbol_id``、可选 ``symbol``、``bids`` 和 ``asks`` 的记录。每档包含 ``price`` 和 ``volume``。``market_book_get()`` 只返回最新的本地缓存项，不保证新鲜度或完整性。``market_book_add()`` 和 ``market_book_release()`` 是订阅别名。``subscribe_book_managed()`` 提供托管清理；与报价一样，必须先 ``await`` 创建句柄，再进入 ``async with``。
+深度行情回调接收包含 ``symbol_id``、可选 ``symbol``、``bids`` 和 ``asks`` 的记录。每档包含 ``price`` 和 ``volume``。``subscribe_book()`` 与 ``unsubscribe_book()`` 会对并发调用加锁串行化，遇到非零响应码时抛出 ``ProtocolError``，并在被拒绝时保留上次确认的深度行情订阅集合与本地缓存。``market_book_get()`` 只返回最新的本地缓存项，不保证新鲜度或完整性。``market_book_add()`` 和 ``market_book_release()`` 是订阅别名。``subscribe_book_managed()`` 提供托管清理；与报价一样，必须先 ``await`` 创建句柄，再进入 ``async with``。
 
 回调注册、类型化事件、背压和移除处理器，请参阅 :doc:`push_notifications`。超时、重连缺口和不确定命令结果，请参阅 :doc:`reliability`。
