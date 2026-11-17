@@ -50,10 +50,15 @@ import tokenize
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 
-# Fix Windows console encoding issue
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+def _configure_windows_stdio() -> None:
+    """Configure UTF-8 console output on Windows when invoked as a CLI script."""
+    if sys.platform != "win32":
+        return
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def find_python_files(root_dir: str, exclude_dirs: Optional[List[str]] = None) -> List[str]:
@@ -671,6 +676,7 @@ def batch_analyze(
 
 def main():
     """Main entry point."""
+    _configure_windows_stdio()
     parser = argparse.ArgumentParser(
         description="Analyze Python files for missing docstrings and Chinese comments.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

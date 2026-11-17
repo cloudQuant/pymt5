@@ -866,13 +866,17 @@ async def test_handle_disconnect_and_close_reset_connected_at_and_uptime() -> No
     client.transport.connect = AsyncMock()
     client.transport.close = AsyncMock()
 
-    await client.connect()
-    client.transport._state = TransportState.READY
-    assert client._connected_at > 0
+    clock = iter([100.0, 101.0, 101.05, 105.0])
+    with (
+        patch("pymt5.client.time.monotonic", side_effect=lambda: next(clock, 110.0)),
+        patch.object(client, "ping", new_callable=AsyncMock),
+    ):
+        await client.connect()
+        client.transport._state = TransportState.READY
+        assert client._connected_at == 100.0
 
-    with patch.object(client, "ping", new_callable=AsyncMock):
         connected_status = await client.health_check()
-    assert connected_status.uptime_seconds > 0
+    assert connected_status.uptime_seconds == pytest.approx(5.0)
 
     client._handle_disconnect()
     assert client._connected_at == 0.0
